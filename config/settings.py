@@ -15,9 +15,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = "django-insecure-le9b$ui2r5s)ifc@4l8f2+q)ow@rm=ugi5g2po!nq@8t4d#4f8"
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-ALLOWED_HOSTS = []
+DEBUG = os.getenv("DEBUG", "False").lower() == "true"
 
 
 # Application definition
@@ -34,6 +32,7 @@ INSTALLED_APPS = [
     "apps.agents",
     "apps.social_media_chatbot",
     "apps.dashboard",
+    "corsheaders",
 ]
 
 REST_FRAMEWORK = {
@@ -42,6 +41,7 @@ REST_FRAMEWORK = {
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -130,3 +130,41 @@ MAILERS = {
         "BACKEND": "django.core.mail.backends.console.EmailBackend",
     },
 }
+
+
+
+if DEBUG:
+    ALLOWED_HOSTS = [
+        "localhost",
+        "127.0.0.1",
+        "195.248.240.152",
+    ]
+    
+    CORS_ALLOWED_ORIGINS = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://195.248.240.152:3000",
+    ]
+    
+    CSRF_TRUSTED_ORIGINS = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://195.248.240.152:3000",
+    ]
+else:
+    ALLOWED_HOSTS = [
+        "195.248.240.152",
+        # "example.com",
+        # "www.example.com",
+    ]
+    
+    CORS_ALLOWED_ORIGINS = [
+        # "https://example.com",
+        # "https://www.example.com",
+    ]
+
+    CSRF_TRUSTED_ORIGINS = [
+        # "https://example.com",
+        # "https://www.example.com",
+    ]
+    
