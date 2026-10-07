@@ -37,4 +37,8 @@ urlpatterns = [
         "",
         include("apps.dashboard.urls"),
     ),
+    path(
+        "article-agent/",
+        include("apps.article_agent.presentation.web.urls"),
+    ),
 ]

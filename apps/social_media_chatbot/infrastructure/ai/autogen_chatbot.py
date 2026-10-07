@@ -7,9 +7,9 @@ from autogen_ext.models.openai import OpenAIChatCompletionClient
 class AutoGenChatbot:
     def __init__(self):
         self.model_client = OpenAIChatCompletionClient(
-            model=os.getenv("GROQ_MODEL"),
-            api_key=os.getenv("GROQ_API_KEY"),
-            base_url=os.getenv("GROQ_BASE_URL"),
+            model=os.getenv("LLM_MODEL"),
+            api_key=os.getenv("LLM_API_KEY"),
+            base_url=os.getenv("LLM_BASE_URL"),
             model_info={
                 "vision": False,
                 "function_calling": False,

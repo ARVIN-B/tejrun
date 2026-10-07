@@ -29,10 +29,11 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "rest_framework",
     "drf_spectacular",
+    "corsheaders",
     "apps.agents",
     "apps.social_media_chatbot",
     "apps.dashboard",
-    "corsheaders",
+    "apps.article_agent",
 ]
 
 REST_FRAMEWORK = {
@@ -121,6 +122,27 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+# Article generation is deliberately delegated to Celery. Redis is only a
+# broker/result backend; PostgreSQL and file storage remain the durable source.
+REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", REDIS_URL)
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", REDIS_URL)
+CELERY_TASK_DEFAULT_QUEUE = "default"
+CELERY_TASK_ROUTES = {
+    "apps.article_agent.tasks.generate_article_task": {"queue": "article_generation"},
+}
+CELERY_TASK_TIME_LIMIT = int(os.getenv("ARTICLE_AGENT_TASK_TIME_LIMIT", "3600"))
+CELERY_TASK_SOFT_TIME_LIMIT = int(os.getenv("ARTICLE_AGENT_TASK_SOFT_TIME_LIMIT", "3300"))
+ARTICLE_AGENT_MAX_RETRIES = int(os.getenv("ARTICLE_AGENT_MAX_RETRIES", "5"))
+ARTICLE_AGENT_RETRY_BACKOFF_SECONDS = int(os.getenv("ARTICLE_AGENT_RETRY_BACKOFF_SECONDS", "60"))
+ARTICLE_AGENT_MAX_WORD_COUNT = int(os.getenv("ARTICLE_AGENT_MAX_WORD_COUNT", "20000"))
+ARTICLE_AGENT_MAX_HEADINGS = int(os.getenv("ARTICLE_AGENT_MAX_HEADINGS", "10"))
+ARTICLE_AGENT_MAX_KEYWORDS = int(os.getenv("ARTICLE_AGENT_MAX_KEYWORDS", "20"))
+ARTICLE_AGENT_MAX_KEYWORD_LENGTH = int(os.getenv("ARTICLE_AGENT_MAX_KEYWORD_LENGTH", "120"))
+
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
@@ -132,20 +154,19 @@ MAILERS = {
 }
 
 
-
 if DEBUG:
     ALLOWED_HOSTS = [
         "localhost",
         "127.0.0.1",
         "195.248.240.152",
     ]
-    
+
     CORS_ALLOWED_ORIGINS = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://195.248.240.152:3000",
     ]
-    
+
     CSRF_TRUSTED_ORIGINS = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -157,7 +178,7 @@ else:
         # "example.com",
         # "www.example.com",
     ]
-    
+
     CORS_ALLOWED_ORIGINS = [
         # "https://example.com",
         # "https://www.example.com",
@@ -167,4 +188,5 @@ else:
         # "https://example.com",
         # "https://www.example.com",
     ]
-    
+
+LOGIN_URL = "/login/"

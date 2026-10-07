@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Article Agent{% endblock %}
+{% block content %}
+<section style="max-width:1100px;margin:40px auto;color:#fff;padding:24px">
+  <div style="display:flex;justify-content:space-between;align-items:center"><h1>Article Agent</h1><button id="open-modal">+ Create New Article</button></div>
+  <p id="notice" role="alert"></p>
+  <table style="width:100%;border-collapse:collapse;background:#111827"><thead><tr><th>Title</th><th>Keywords</th><th>Status</th><th>Progress</th><th>Actions</th></tr></thead><tbody>
+  {% for job in jobs %}<tr data-job="{{ job.id }}"><td>{{ job.article.title }}</td><td>{{ job.article.keywords|join:", " }}</td><td class="status">{{ job.get_status_display }}</td><td class="progress">{{ job.progress }}% — {{ job.current_stage }}</td><td class="actions">{% if job.status == 'completed' %}<a href="{% url 'article_job_download' job.id %}">Download</a>{% elif job.status == 'failed' or job.status == 'cancelled' %}<button data-retry="{{ job.id }}">Retry</button>{% else %}<button data-cancel="{{ job.id }}">Cancel</button>{% endif %}</td></tr>{% empty %}<tr><td colspan="5">No article jobs yet.</td></tr>{% endfor %}</tbody></table>
+</section>
+<dialog id="article-modal"><form id="article-form" method="post">{% csrf_token %}<h2>Create New Article</h2><label>Title <input name="title" maxlength="255" required></label><label>Word count <input name="word_count" type="number" min="100" required></label><label>Main headings (one per line)<textarea name="headings_text" required></textarea></label><label>Keywords, separated by -<input name="keywords" placeholder="هوش مصنوعی-پزشکی"></label><button type="submit">Queue article</button><button type="button" id="close-modal">Close</button></form></dialog>
+<script>
+const modal=document.querySelector('#article-modal'), notice=document.querySelector('#notice');
+document.querySelector('#open-modal').onclick=()=>modal.showModal(); document.querySelector('#close-modal').onclick=()=>modal.close();
+const csrf=()=>document.cookie.split('; ').find(x=>x.startsWith('csrftoken='))?.split('=')[1];
+document.querySelector('#article-form').onsubmit=async e=>{e.preventDefault();const d=new FormData(e.target), lines=d.get('headings_text').split('\n').map(x=>x.trim()).filter(Boolean);d.delete('headings_text');lines.forEach(x=>d.append('headings',x));const r=await fetch('{% url "article_job_create" %}',{method:'POST',body:d,headers:{'X-CSRFToken':csrf()}}), data=await r.json();if(!r.ok){notice.textContent=data.error;return} modal.close();location.reload()};
+async function act(id,action){const r=await fetch(`/article-agent/jobs/${id}/${action}/`,{method:'POST',headers:{'X-CSRFToken':csrf()}});if(!r.ok)notice.textContent=(await r.json()).error;else location.reload()}
+document.addEventListener('click',e=>{if(e.target.dataset.cancel)act(e.target.dataset.cancel,'cancel');if(e.target.dataset.retry)act(e.target.dataset.retry,'retry')});
+async function poll(){for(const row of document.querySelectorAll('[data-job]')){const d=await fetch(`/article-agent/jobs/${row.dataset.job}/`).then(r=>r.ok?r.json():null);if(d){row.querySelector('.status').textContent=d.status;row.querySelector('.progress').textContent=`${d.progress}% — ${d.current_stage}`}}}
+setInterval(poll,3000);
+</script>
+{% endblock %}
