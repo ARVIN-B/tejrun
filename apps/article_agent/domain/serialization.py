@@ -82,6 +82,7 @@ def section_plan_from_dict(value: object) -> SectionPlan:
             must_avoid=_string_list(data, "must_avoid"),
             dependencies=dependencies,
             research_requirements=_string_list(data, "research_requirements"),
+            keywords=_string_list(data, "keywords"),
         )
     except (TypeError, ValueError) as error:
         if isinstance(error, ContractValidationError):
@@ -184,6 +185,7 @@ def article_plan_to_dict(plan: ArticlePlan) -> dict[str, Any]:
                 "must_avoid": section.must_avoid,
                 "dependencies": section.dependencies,
                 "research_requirements": section.research_requirements,
+                "keywords": section.keywords,
             }
             for section in plan.sections
         ],

@@ -1,4 +1,7 @@
+import asyncio
 import os
+
+from django.conf import settings
 
 from autogen_core import CancellationToken
 from autogen_core.models import UserMessage
@@ -21,14 +24,17 @@ class GroqClient:
         )
 
     async def generate(self, prompt: str) -> str:
-        result = await self.model_client.create(
-            messages=[
-                UserMessage(
-                    content=prompt,
-                    source="user",
-                )
-            ],
-            cancellation_token=CancellationToken(),
+        result = await asyncio.wait_for(
+            self.model_client.create(
+                messages=[
+                    UserMessage(
+                        content=prompt,
+                        source="user",
+                    )
+                ],
+                cancellation_token=CancellationToken(),
+            ),
+            timeout=settings.ARTICLE_AGENT_LLM_TIMEOUT_SECONDS,
         )
 
         return result.content

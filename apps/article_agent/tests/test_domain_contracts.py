@@ -24,17 +24,21 @@ class DomainContractTests(unittest.TestCase):
         request = ArticleRequest(
             title="  Django Guide  ",
             word_count=1_500,
-            headings=[" Introduction ", "introduction", "Deployment"],
+            headings=[" Introduction ", "Architecture", "Deployment"],
             keywords=[" Django ", "django", " PostgreSQL "],
         )
 
         self.assertEqual(request.title, "Django Guide")
-        self.assertEqual(request.headings, ["Introduction", "Deployment"])
+        self.assertEqual(request.headings, ["Introduction", "Architecture", "Deployment"])
         self.assertEqual(request.keywords, ["Django", "PostgreSQL"])
 
     def test_article_request_rejects_missing_heading(self) -> None:
         with self.assertRaisesRegex(ValueError, "At least one heading"):
             ArticleRequest(title="Topic", word_count=500, headings=[])
+
+    def test_article_request_rejects_duplicate_headings_without_changing_order(self) -> None:
+        with self.assertRaisesRegex(ValueError, "headings must not contain duplicates"):
+            ArticleRequest(title="Topic", word_count=500, headings=["Intro", "intro"])
 
     def test_article_plan_requires_sequential_section_indexes(self) -> None:
         section = SectionPlan(

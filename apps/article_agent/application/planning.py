@@ -34,6 +34,7 @@ class ArticlePlanner:
                 must_avoid=["Repeat already covered concepts without adding new value."],
                 dependencies=[index - 1] if index else [],
                 research_requirements=[],
+                keywords=request.keywords,
             )
             for index, (heading, allocation) in enumerate(zip(request.headings, allocations, strict=True))
         ]

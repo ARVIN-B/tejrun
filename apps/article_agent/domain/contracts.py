@@ -36,6 +36,14 @@ def _unique_strings(values: list[str]) -> list[str]:
     return result
 
 
+def _required_strings(values: list[str], field_name: str) -> list[str]:
+    """Normalize user-required ordered values without silently removing them."""
+    normalized = [_non_empty(value, field_name) for value in values]
+    if len({value.casefold() for value in normalized}) != len(normalized):
+        raise ValueError(f"{field_name} must not contain duplicates.")
+    return normalized
+
+
 @dataclass(slots=True)
 class ArticleRequest:
     title: str
@@ -51,7 +59,7 @@ class ArticleRequest:
         self.title = _non_empty(self.title, "title")
         if self.word_count <= 0:
             raise ValueError("word_count must be greater than zero.")
-        self.headings = _unique_strings(self.headings)
+        self.headings = _required_strings(self.headings, "headings")
         if not self.headings:
             raise ValueError("At least one heading is required.")
         self.keywords = _unique_strings(self.keywords)
@@ -74,6 +82,7 @@ class SectionPlan:
     must_avoid: list[str] = field(default_factory=list)
     dependencies: list[int] = field(default_factory=list)
     research_requirements: list[str] = field(default_factory=list)
+    keywords: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.index < 0:
@@ -90,6 +99,7 @@ class SectionPlan:
         self.must_include = _unique_strings(self.must_include)
         self.must_avoid = _unique_strings(self.must_avoid)
         self.research_requirements = _unique_strings(self.research_requirements)
+        self.keywords = _unique_strings(self.keywords)
         if any(dependency < 0 for dependency in self.dependencies):
             raise ValueError("dependencies cannot contain negative indexes.")
 

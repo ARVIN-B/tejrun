@@ -53,6 +53,7 @@ class ArticleJob(models.Model):
     request_payload = models.JSONField(default=dict)
     plan_payload = models.JSONField(default=dict, blank=True)
     memory_payload = models.JSONField(default=dict, blank=True)
+    result_payload = models.JSONField(default=dict, blank=True)
     error_code = models.CharField(max_length=64, blank=True, default="")
     error_message = models.CharField(max_length=500, blank=True, default="")
     output_file = models.FileField(upload_to="article_outputs/%Y/%m/", blank=True)

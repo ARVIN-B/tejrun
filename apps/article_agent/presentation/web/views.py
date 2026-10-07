@@ -34,7 +34,7 @@ def create_article_job(request):
     keywords = _keywords(request.POST.get("keywords", ""))
     try: word_count = int(request.POST.get("word_count", ""))
     except ValueError: return JsonResponse({"success": False, "error": "Word count must be a number."}, status=400)
-    if not title or not headings or len(headings) > settings.ARTICLE_AGENT_MAX_HEADINGS or not 100 <= word_count <= settings.ARTICLE_AGENT_MAX_WORD_COUNT:
+    if not title or len(title) > 255 or not headings or len(headings) > settings.ARTICLE_AGENT_MAX_HEADINGS or any(len(heading) > settings.ARTICLE_AGENT_MAX_HEADING_LENGTH for heading in headings) or len({heading.casefold() for heading in headings}) != len(headings) or not 100 <= word_count <= settings.ARTICLE_AGENT_MAX_WORD_COUNT:
         return JsonResponse({"success": False, "error": "Provide valid article details."}, status=400)
     if len(keywords) > settings.ARTICLE_AGENT_MAX_KEYWORDS or any(len(item) > settings.ARTICLE_AGENT_MAX_KEYWORD_LENGTH for item in keywords):
         return JsonResponse({"success": False, "error": "Too many or overly long keywords."}, status=400)
@@ -49,7 +49,7 @@ def create_article_job(request):
 @login_required
 def job_status(request, job_id):
     job = _owned(request, job_id)
-    return JsonResponse({"id": job.pk, "title": job.article.title, "keywords": job.article.keywords, "word_count": job.article.word_count, "status": job.status, "progress": job.progress, "current_stage": job.current_stage, "current_section": job.current_section, "total_sections": job.total_sections, "error_message": job.error_message, "download_available": job.status == JobStatus.COMPLETED and bool(job.output_file)})
+    return JsonResponse({"id": job.pk, "title": job.article.title, "keywords": job.article.keywords, "word_count": job.article.word_count, "status": job.status, "progress": job.progress, "current_stage": job.current_stage, "current_section": job.current_section, "total_sections": job.total_sections, "error_message": job.error_message, "created_at": job.created_at.isoformat(), "updated_at": job.updated_at.isoformat(), "download_available": job.status == JobStatus.COMPLETED and bool(job.output_file)})
 
 
 @require_POST
@@ -67,7 +67,7 @@ def cancel_job(request, job_id):
 def retry_job(request, job_id):
     job = _owned(request, job_id)
     if job.status not in {JobStatus.FAILED, JobStatus.CANCELLED}: return JsonResponse({"success": False, "error": "This job cannot be retried."}, status=409)
-    job.status, job.progress, job.current_stage, job.error_message = JobStatus.QUEUED, 0, "Queued", ""
+    job.status, job.progress, job.current_stage, job.error_message, job.error_code = JobStatus.QUEUED, 0, "Queued", "", ""
     task = generate_article_task.apply_async(args=[job.pk], queue="article_generation")
     job.celery_task_id = task.id; job.save(); return JsonResponse({"success": True, "status": job.status})
 
