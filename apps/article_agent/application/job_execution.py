@@ -15,7 +15,7 @@ from apps.article_agent.application.context_builder import ContextBuilder
 from apps.article_agent.application.memory import MemoryUpdater
 from apps.article_agent.application.planning import ArticlePlanner
 from apps.article_agent.application.services import (
-    ArticleReviewer, FinalEditor, NoopResearcher, RevisionService,
+    ArticleReviewer, FinalEditor, GroundingResearcher, RevisionService,
     SectionReviewer, SectionWriter, SupplementWriter,
 )
 from apps.article_agent.domain import ArticleMemory, ArticleRequest, SectionDraft
@@ -59,7 +59,7 @@ class ArticleJobExecutionService:
         context_builder = ContextBuilder()
         try:
             pipeline = ArticlePipeline(
-                planner=ArticlePlanner(), researcher=NoopResearcher(),
+                planner=ArticlePlanner(), researcher=GroundingResearcher(),
                 writer=SectionWriter(llm, context_builder), reviewer=SectionReviewer(llm, context_builder),
                 reviser=RevisionService(llm, context_builder), memory_updater=MemoryUpdater(),
                 article_reviewer=ArticleReviewer(llm, context_builder), final_editor=FinalEditor(llm, context_builder),

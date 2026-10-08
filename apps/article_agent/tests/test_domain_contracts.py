@@ -1,4 +1,5 @@
 import unittest
+import json
 
 from apps.article_agent.domain import (
     ArticleMemory,
@@ -155,6 +156,11 @@ class DomainContractTests(unittest.TestCase):
 
         self.assertLessEqual(len(context), 2_000)
         self.assertNotIn("full previous article", context)
+
+    def test_context_budget_never_returns_invalid_json(self) -> None:
+        builder = ContextBuilder(ContextBudgets(writer_context_limit=40))
+        context = builder._bounded_json({"task": "required", "memory": {"x": "y" * 10000}}, 40)
+        self.assertEqual(json.loads(context)["task"], "required")
 
     def test_memory_updater_keeps_compact_summaries_and_bounded_entries(self) -> None:
         updater = MemoryUpdater(MemoryBudget(max_items_per_field=2, max_summary_characters=40))

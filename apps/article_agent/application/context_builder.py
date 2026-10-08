@@ -128,18 +128,27 @@ class ContextBuilder:
 
     @staticmethod
     def _bounded_json(payload: dict[str, Any], limit: int) -> str:
-        """Trim low-priority list content deterministically until the budget fits."""
-        result = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        if len(result) <= limit:
-            return result
+        """Return valid JSON while retaining required top-level fields.
 
+        Lists and free-text fields are compacted before optional fields are
+        discarded; raw JSON is never sliced into an invalid document.
+        """
         compacted = ContextBuilder._compact(payload)
-        result = json.dumps(compacted, ensure_ascii=False, separators=(",", ":"))
-        if len(result) <= limit:
-            return result
-
-        # String clipping is a final guard after structured compaction, not context design.
-        return result[: max(0, limit - 1)] + "…"
+        optional = ("research", "memory", "findings", "draft")
+        while True:
+            result = json.dumps(compacted, ensure_ascii=False, separators=(",", ":"))
+            if len(result) <= limit:
+                return result
+            changed = False
+            for key in optional:
+                if isinstance(compacted, dict) and key in compacted and compacted[key]:
+                    compacted[key] = [] if isinstance(compacted[key], list) else {}
+                    changed = True
+                    break
+            if not changed:
+                # Required content exceeds a nonsensical budget. Preserve
+                # schema validity and the current task instead of corrupting JSON.
+                return json.dumps({"task": compacted.get("task", "bounded context"), "truncated": True}, ensure_ascii=False)
 
     @staticmethod
     def _compact(value: Any) -> Any:

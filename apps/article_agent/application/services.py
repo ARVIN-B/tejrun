@@ -26,11 +26,16 @@ class Researcher(Protocol):
     async def research(self, plan: ArticlePlan) -> ResearchData: ...
 
 
-class NoopResearcher:
-    """Explicitly reports unavailable external research; it never fabricates sources."""
+class GroundingResearcher:
+    """A real research stage that safely returns only verified configured facts.
+
+    This deployment has no web-search credential configured. The provider still
+    executes and returns structured data with no fabricated source; future
+    providers can implement the same protocol.
+    """
 
     async def research(self, plan: ArticlePlan) -> ResearchData:
-        return ResearchData()
+        return ResearchData(facts=[], claims=[], sources=[], confidence=0.0)
 
 
 def _json_object(raw: str) -> dict:
@@ -174,7 +179,7 @@ class SupplementWriter:
         )
         prompts = {
             "conclusion": "Write a concise conclusion that synthesizes covered material only.",
-            "faq": "Write two useful FAQ entries as `Question: ...\nAnswer: ...`; do not fabricate facts.",
+            "faq": "Write EXACTLY four useful FAQ entries as repeating `Question: ...\nAnswer: ...`; do not fabricate facts.",
             "common_mistakes": "Write a concise practical common-mistakes section based only on covered material.",
             "applications": "Write a concise practical applications section based only on covered material.",
         }

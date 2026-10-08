@@ -8,7 +8,7 @@ from apps.article_agent.application.context_builder import ContextBuilder
 from apps.article_agent.application.memory import MemoryUpdater
 from apps.article_agent.application.planning import ArticlePlanner
 from apps.article_agent.application.services import (
-    ArticleReviewer, FinalEditor, NoopResearcher, RevisionService,
+    ArticleReviewer, FinalEditor, GroundingResearcher, RevisionService,
     SectionReviewer, SectionWriter, SupplementWriter,
 )
 from apps.article_agent.domain import ArticleMemory, ArticleRequest
@@ -32,8 +32,8 @@ class FakeLlm:
             return '{"passed":true,"score":9,"findings":[],"required_fixes":[]}'
         if "Write a concise conclusion" in prompt:
             return "concise conclusion"
-        if "Write two useful FAQ" in prompt:
-            return "Question: Why?\nAnswer: Because."
+        if "EXACTLY four useful FAQ" in prompt:
+            return "Question: One?\nAnswer: One.\nQuestion: Two?\nAnswer: Two.\nQuestion: Three?\nAnswer: Three.\nQuestion: Four?\nAnswer: Four."
         if "common-mistakes" in prompt:
             return "avoid repetition"
         if "applications section" in prompt:
@@ -57,7 +57,7 @@ class ArticlePipelineIntegrationTests(SimpleTestCase):
             llm, renderer, builder = FakeLlm(), FakeRenderer(), ContextBuilder()
             stages, plans, persisted, memories = [], [], [], []
             pipeline = ArticlePipeline(
-                planner=ArticlePlanner(), researcher=NoopResearcher(),
+                planner=ArticlePlanner(), researcher=GroundingResearcher(),
                 writer=SectionWriter(llm, builder), reviewer=SectionReviewer(llm, builder),
                 reviser=RevisionService(llm, builder), memory_updater=MemoryUpdater(),
                 article_reviewer=ArticleReviewer(llm, builder), final_editor=FinalEditor(llm, builder),
@@ -81,6 +81,7 @@ class ArticlePipelineIntegrationTests(SimpleTestCase):
         self.assertTrue(result.quality_report.passed)
         self.assertEqual([item[0].heading for item in persisted if "passed" in item[1]], request.headings)
         self.assertEqual([section["heading"] for section in renderer.articles[0]["sections"]], request.headings)
+        self.assertEqual(len(renderer.articles[0]["FAQ"]), 4)
         self.assertEqual(len(memories), 2)
         self.assertIn("researching", [stage[0] for stage in stages])
         self.assertIn("reviewing", [stage[0] for stage in stages])

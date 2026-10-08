@@ -7,12 +7,12 @@ from apps.article_agent.domain import ArticleRequest, SectionDraft
 
 class QualityGateTests(SimpleTestCase):
     def setUp(self) -> None:
-        self.request = ArticleRequest(title="Topic", word_count=12, headings=["One", "Two"], language="en")
+        self.request = ArticleRequest(title="Topic", word_count=20, headings=["One", "Two"], language="en")
         self.sections = [
             SectionDraft(0, "One", "one two three four"),
             SectionDraft(1, "Two", "five six seven eight"),
         ]
-        self.payload = {"conclusion": "nine", "FAQ": [{"question": "q", "answer": "a"}], "common_mistakes": "ten", "applications": "eleven twelve"}
+        self.payload = {"conclusion": "nine", "FAQ": [{"question": f"q{index}", "answer": f"a{index}"} for index in range(4)], "common_mistakes": "ten", "applications": "eleven twelve"}
         self.gate = QualityGate(0.5)
 
     def test_valid_article_passes(self) -> None:
@@ -35,7 +35,12 @@ class QualityGateTests(SimpleTestCase):
         self.assertFalse(report.checks["section_reviews_passed"])
 
     def test_missing_required_keyword_blocks_completion(self) -> None:
-        request = ArticleRequest(title="Topic", word_count=12, headings=["One", "Two"], keywords=["required-keyword"], language="en")
+        request = ArticleRequest(title="Topic", word_count=20, headings=["One", "Two"], keywords=["required-keyword"], language="en")
         report = self.gate.evaluate(request, self.sections, self.payload, [], True)
         self.assertFalse(report.passed)
         self.assertFalse(report.checks["keywords_covered"])
+
+    def test_faq_count_must_be_exactly_four(self) -> None:
+        payload = {**self.payload, "FAQ": [{"question": "q", "answer": "a"}] * 3}
+        report = self.gate.evaluate(self.request, self.sections, payload, [], True)
+        self.assertFalse(report.passed)

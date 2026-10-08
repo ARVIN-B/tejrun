@@ -11,7 +11,7 @@ from apps.article_agent.application.context_builder import ContextBuilder
 from apps.article_agent.application.memory import MemoryUpdater
 from apps.article_agent.application.planning import ArticlePlanner
 from apps.article_agent.application.services import (
-    ArticleReviewer, FinalEditor, NoopResearcher, Researcher, RevisionService,
+    ArticleReviewer, FinalEditor, Researcher, RevisionService,
     SectionReviewer, SectionWriter, SupplementWriter,
 )
 from apps.article_agent.domain import ArticleMemory, ArticleRequest, QualityReport, ReviewResult, SectionDraft, StyleProfile
@@ -42,7 +42,7 @@ class QualityGate:
 
     def evaluate(self, request: ArticleRequest, sections: list[SectionDraft], payload: dict, critical_issues: list[str], reviews_passed: bool) -> QualityReport:
         headings = [section.heading for section in sections]
-        word_count = sum(section.word_count for section in sections) + sum(len(str(value).split()) for value in payload.values())
+        word_count = sum(section.word_count for section in sections) + self._payload_words(payload)
         article_text = " ".join([*(section.content for section in sections), *(str(value) for value in payload.values())]).casefold()
         checks = {
             "headings_preserved": headings == request.headings,
@@ -50,7 +50,9 @@ class QualityGate:
             "sections_non_empty": all(section.content.strip() for section in sections),
             "word_count_within_tolerance": abs(word_count - request.word_count) / request.word_count <= self.tolerance,
             "conclusion_present": bool(payload.get("conclusion")),
-            "faq_present": bool(payload.get("FAQ")),
+            "faq_exactly_four": isinstance(payload.get("FAQ"), list) and len(payload["FAQ"]) == 4 and all(
+                item.get("question", "").strip() and item.get("answer", "").strip() for item in payload["FAQ"]
+            ),
             "common_mistakes_present": bool(payload.get("common_mistakes")),
             "applications_present": bool(payload.get("applications")),
             "no_critical_issues": not critical_issues,
@@ -62,6 +64,14 @@ class QualityGate:
             actual_word_count=word_count, tolerance=self.tolerance, checks=checks,
             warnings=critical_issues,
         )
+
+    @staticmethod
+    def _payload_words(payload: dict) -> int:
+        faq_words = sum(
+            len(item.get("question", "").split()) + len(item.get("answer", "").split())
+            for item in payload.get("FAQ", []) if isinstance(item, dict)
+        )
+        return faq_words + sum(len(str(payload.get(key, "")).split()) for key in ("conclusion", "common_mistakes", "applications"))
 
 
 class ArticlePipeline:
@@ -172,4 +182,6 @@ class ArticlePipeline:
             elif (lowered.startswith("answer:") or normalized.startswith("پاسخ:")) and question:
                 entries.append({"question": question, "answer": normalized.split(":", 1)[1].strip()})
                 question = ""
+        if len(entries) != 4:
+            raise PipelineQualityError("faq_count_must_equal_four")
         return entries

@@ -1,3 +1,9 @@
+"""Deprecated legacy generator.
+
+It is retained temporarily for historical compatibility only. Production jobs
+run through ``ArticlePipeline`` and must not import this module.
+"""
+
 from copy import deepcopy
 
 from apps.article_agent.infrastructure.ai.groq_client import GroqClient
