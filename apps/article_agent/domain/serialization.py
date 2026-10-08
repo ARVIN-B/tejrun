@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from .contracts import (
+    ArticleAllocation,
+    ArticleBudget,
     ArticlePlan,
     ArticleRequest,
     ArticleReview,
@@ -90,6 +92,30 @@ def section_plan_from_dict(value: object) -> SectionPlan:
         raise ContractValidationError(str(error)) from error
 
 
+def article_budget_from_dict(value: object) -> ArticleBudget:
+    data = _mapping(value, "ArticleBudget")
+    try:
+        allocations = []
+        for value in _list(_required(data, "allocations"), "allocations"):
+            allocation = _mapping(value, "allocation")
+            allocations.append(ArticleAllocation(
+                unit_id=_required(allocation, "unit_id"),
+                unit_type=_required(allocation, "unit_type"),
+                target_words=_required(allocation, "target_words"),
+                minimum_words=_required(allocation, "minimum_words"),
+                maximum_words=_required(allocation, "maximum_words"),
+                priority=_required(allocation, "priority"),
+                generated_words=allocation.get("generated_words", 0),
+                status=allocation.get("status", "planned"),
+            ))
+        return ArticleBudget(
+            total_words=_required(data, "total_words"), allocations=allocations,
+            reserved_words=data.get("reserved_words", 0), consumed_words=data.get("consumed_words", 0),
+        )
+    except (TypeError, ValueError) as error:
+        raise ContractValidationError(str(error)) from error
+
+
 def article_plan_from_dict(value: object) -> ArticlePlan:
     data = _mapping(value, "ArticlePlan")
     try:
@@ -103,6 +129,7 @@ def article_plan_from_dict(value: object) -> ArticlePlan:
             primary_topic=_required(data, "primary_topic"),
             keywords=_string_list(data, "keywords"),
             sections=sections,
+            budget=article_budget_from_dict(_required(data, "budget")),
             global_constraints=_string_list(data, "global_constraints"),
             seo_intent=data.get("seo_intent", "informational"),
             coverage_requirements=_string_list(data, "coverage_requirements"),
@@ -189,6 +216,24 @@ def article_plan_to_dict(plan: ArticlePlan) -> dict[str, Any]:
             }
             for section in plan.sections
         ],
+        "budget": {
+            "total_words": plan.budget.total_words,
+            "reserved_words": plan.budget.reserved_words,
+            "consumed_words": plan.budget.consumed_words,
+            "allocations": [
+                {
+                    "unit_id": allocation.unit_id,
+                    "unit_type": allocation.unit_type,
+                    "target_words": allocation.target_words,
+                    "minimum_words": allocation.minimum_words,
+                    "maximum_words": allocation.maximum_words,
+                    "priority": allocation.priority,
+                    "generated_words": allocation.generated_words,
+                    "status": allocation.status,
+                }
+                for allocation in plan.budget.allocations
+            ],
+        },
         "global_constraints": plan.global_constraints,
         "seo_intent": plan.seo_intent,
         "coverage_requirements": plan.coverage_requirements,

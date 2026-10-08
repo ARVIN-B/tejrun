@@ -2,6 +2,8 @@
 
 from .contracts import (
     ArticleMemory,
+    ArticleAllocation,
+    ArticleBudget,
     ArticlePlan,
     ArticleRequest,
     ArticleReview,
@@ -17,6 +19,8 @@ from .contracts import (
 
 __all__ = [
     "ArticleMemory",
+    "ArticleAllocation",
+    "ArticleBudget",
     "ArticlePlan",
     "ArticleRequest",
     "ArticleReview",

@@ -2,6 +2,8 @@ import unittest
 import json
 
 from apps.article_agent.domain import (
+    ArticleAllocation,
+    ArticleBudget,
     ArticleMemory,
     ArticlePlan,
     ArticleRequest,
@@ -21,6 +23,21 @@ from apps.article_agent.domain import ResearchData, StyleProfile
 
 
 class DomainContractTests(unittest.TestCase):
+    @staticmethod
+    def _budget(section_count: int, total_words: int = 200) -> ArticleBudget:
+        targets = [total_words // (section_count + 4)] * (section_count + 4)
+        targets[-1] += total_words - sum(targets)
+        units = [
+            *( (f"section:{index}", "section") for index in range(section_count) ),
+            ("conclusion", "conclusion"), ("faq", "faq"),
+            ("common_mistakes", "common_mistakes"), ("applications", "applications"),
+        ]
+        return ArticleBudget(total_words=total_words, allocations=[
+            ArticleAllocation(unit_id=unit_id, unit_type=unit_type, target_words=target,
+                              minimum_words=max(1, target - 1), maximum_words=target + 1, priority=index)
+            for index, ((unit_id, unit_type), target) in enumerate(zip(units, targets, strict=True))
+        ])
+
     def test_article_request_normalizes_headings_and_keywords(self) -> None:
         request = ArticleRequest(
             title="  Django Guide  ",
@@ -62,6 +79,7 @@ class DomainContractTests(unittest.TestCase):
                 primary_topic="Topic",
                 keywords=[],
                 sections=[section],
+                budget=self._budget(1),
             )
 
     def test_memory_normalization_is_compact_and_deduplicated(self) -> None:
@@ -103,11 +121,21 @@ class DomainContractTests(unittest.TestCase):
                         "heading": "Introduction",
                         "purpose": "Set context",
                         "key_points": ["Scope"],
-                        "target_words": 200,
-                        "minimum_words": 150,
-                        "maximum_words": 250,
+                        "target_words": 40,
+                        "minimum_words": 39,
+                        "maximum_words": 41,
                     }
                 ],
+                "budget": {
+                    "total_words": 200,
+                    "allocations": [
+                        {"unit_id": "section:0", "unit_type": "section", "target_words": 40, "minimum_words": 39, "maximum_words": 41, "priority": 0},
+                        {"unit_id": "conclusion", "unit_type": "conclusion", "target_words": 40, "minimum_words": 39, "maximum_words": 41, "priority": 1},
+                        {"unit_id": "faq", "unit_type": "faq", "target_words": 40, "minimum_words": 39, "maximum_words": 41, "priority": 2},
+                        {"unit_id": "common_mistakes", "unit_type": "common_mistakes", "target_words": 40, "minimum_words": 39, "maximum_words": 41, "priority": 3},
+                        {"unit_id": "applications", "unit_type": "applications", "target_words": 40, "minimum_words": 39, "maximum_words": 41, "priority": 4},
+                    ],
+                },
                 "untrusted_extra": "ignored",
             }
         )
@@ -131,9 +159,9 @@ class DomainContractTests(unittest.TestCase):
                 heading=f"Section {index}",
                 purpose="Explain a distinct aspect",
                 key_points=["A key point"],
-                target_words=500,
-                minimum_words=400,
-                maximum_words=600,
+                target_words=181,
+                minimum_words=180,
+                maximum_words=182,
             )
             for index in range(40)
         ]
@@ -146,6 +174,7 @@ class DomainContractTests(unittest.TestCase):
             primary_topic="Topic",
             keywords=["topic"],
             sections=sections,
+            budget=self._budget(40, total_words=8_000),
         )
         memory = ArticleMemory(section_summaries=["x" * 1_000 for _ in range(40)])
         builder = ContextBuilder(ContextBudgets(writer_context_limit=2_000))
@@ -186,7 +215,7 @@ class DomainContractTests(unittest.TestCase):
         self.assertLessEqual(len(updated.section_summaries[-1]), 50)
         self.assertEqual(updated.claims_made, ["Use invalidation"])
 
-    def test_planner_preserves_headings_and_uses_weighted_budgets(self) -> None:
+    def test_planner_allocates_the_complete_article_budget_before_writing(self) -> None:
         request = ArticleRequest(
             title="Distributed systems",
             word_count=2_000,
@@ -198,8 +227,29 @@ class DomainContractTests(unittest.TestCase):
         plan = ArticlePlanner().create_plan(request)
 
         self.assertEqual([section.heading for section in plan.sections], request.headings)
-        self.assertEqual(sum(section.target_words for section in plan.sections), 1_560)
-        self.assertGreater(plan.sections[1].target_words, plan.sections[0].target_words)
+        self.assertEqual(plan.budget.total_words, request.word_count)
+        self.assertEqual(sum(item.target_words for item in plan.budget.allocations), request.word_count)
+        self.assertEqual(
+            {item.unit_type for item in plan.budget.allocations},
+            {"section", "conclusion", "faq", "common_mistakes", "applications"},
+        )
+        self.assertTrue(all(item.minimum_words <= item.target_words <= item.maximum_words for item in plan.budget.allocations))
+        self.assertEqual(sum(section.target_words for section in plan.sections), sum(
+            item.target_words for item in plan.budget.allocations if item.unit_type == "section"
+        ))
+
+    def test_planner_budget_is_feasible_and_exact_for_required_sizes_and_heading_counts(self) -> None:
+        for total_words in (500, 1_000, 5_000, 10_000, 20_000):
+            for heading_count in (1, 3, 10):
+                with self.subTest(total_words=total_words, heading_count=heading_count):
+                    request = ArticleRequest(
+                        title="Planning test", word_count=total_words,
+                        headings=[f"Heading {index}" for index in range(heading_count)], language="en",
+                    )
+                    budget = ArticlePlanner().create_plan(request).budget
+                    self.assertEqual(sum(item.target_words for item in budget.allocations), total_words)
+                    self.assertLessEqual(sum(item.minimum_words for item in budget.allocations), total_words)
+                    self.assertGreaterEqual(sum(item.maximum_words for item in budget.allocations), total_words)
 
 
 if __name__ == "__main__":

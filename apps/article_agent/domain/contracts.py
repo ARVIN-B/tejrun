@@ -14,6 +14,7 @@ from typing import Literal
 DEFAULT_LANGUAGE = "fa"
 DEFAULT_AUDIENCE = "general"
 DEFAULT_TONE = "professional, natural, informative"
+ArticleUnitType = Literal["section", "conclusion", "faq", "common_mistakes", "applications"]
 
 
 def _non_empty(value: str, field_name: str) -> str:
@@ -105,6 +106,72 @@ class SectionPlan:
 
 
 @dataclass(slots=True)
+class ArticleAllocation:
+    """A persisted word reservation for one required article unit."""
+
+    unit_id: str
+    unit_type: ArticleUnitType
+    target_words: int
+    minimum_words: int
+    maximum_words: int
+    priority: int
+    generated_words: int = 0
+    status: Literal["planned", "reserved", "accepted"] = "planned"
+
+    def __post_init__(self) -> None:
+        self.unit_id = _non_empty(self.unit_id, "unit_id")
+        if self.unit_type not in {"section", "conclusion", "faq", "common_mistakes", "applications"}:
+            raise ValueError("unit_type is invalid.")
+        if self.minimum_words <= 0:
+            raise ValueError("minimum_words must be greater than zero.")
+        if not self.minimum_words <= self.target_words <= self.maximum_words:
+            raise ValueError("target_words must be within the allocation word range.")
+        if self.priority < 0 or self.generated_words < 0:
+            raise ValueError("priority and generated_words must be zero or greater.")
+        if self.status not in {"planned", "reserved", "accepted"}:
+            raise ValueError("status is invalid.")
+
+
+@dataclass(slots=True)
+class ArticleBudget:
+    """Full-article budget, validated before any prose generation begins."""
+
+    total_words: int
+    allocations: list[ArticleAllocation]
+    reserved_words: int = 0
+    consumed_words: int = 0
+
+    def __post_init__(self) -> None:
+        if self.total_words <= 0:
+            raise ValueError("total_words must be greater than zero.")
+        if not self.allocations:
+            raise ValueError("An article budget requires allocations.")
+        unit_ids = [allocation.unit_id for allocation in self.allocations]
+        if len(unit_ids) != len(set(unit_ids)):
+            raise ValueError("allocation unit_id values must be unique.")
+        if sum(item.target_words for item in self.allocations) != self.total_words:
+            raise ValueError("Allocation targets must equal total_words.")
+        if sum(item.minimum_words for item in self.allocations) > self.total_words:
+            raise ValueError("Allocation minimums exceed total_words.")
+        if sum(item.maximum_words for item in self.allocations) < self.total_words:
+            raise ValueError("Allocation maximums cannot satisfy total_words.")
+        if self.reserved_words < 0 or self.consumed_words < 0:
+            raise ValueError("reserved_words and consumed_words must be zero or greater.")
+        if self.reserved_words > self.total_words or self.consumed_words > self.total_words:
+            raise ValueError("reserved_words and consumed_words cannot exceed total_words.")
+
+    @property
+    def remaining_words(self) -> int:
+        return self.total_words - self.consumed_words
+
+    def allocation_for(self, unit_id: str) -> ArticleAllocation:
+        for allocation in self.allocations:
+            if allocation.unit_id == unit_id:
+                return allocation
+        raise KeyError(unit_id)
+
+
+@dataclass(slots=True)
 class ArticlePlan:
     title: str
     goal: str
@@ -114,6 +181,7 @@ class ArticlePlan:
     primary_topic: str
     keywords: list[str]
     sections: list[SectionPlan]
+    budget: ArticleBudget
     global_constraints: list[str] = field(default_factory=list)
     seo_intent: str = "informational"
     coverage_requirements: list[str] = field(default_factory=list)
@@ -130,6 +198,18 @@ class ArticlePlan:
         expected_indexes = list(range(len(self.sections)))
         if [section.index for section in self.sections] != expected_indexes:
             raise ValueError("Section indexes must be sequential and start at zero.")
+        section_allocations = [item for item in self.budget.allocations if item.unit_type == "section"]
+        if len(section_allocations) != len(self.sections):
+            raise ValueError("Budget must allocate every section.")
+        for section in self.sections:
+            allocation = self.budget.allocation_for(f"section:{section.index}")
+            if (section.target_words, section.minimum_words, section.maximum_words) != (
+                allocation.target_words, allocation.minimum_words, allocation.maximum_words,
+            ):
+                raise ValueError("Section plan budgets must match article budget allocations.")
+        required_extras = {"conclusion", "faq", "common_mistakes", "applications"}
+        if {item.unit_type for item in self.budget.allocations} < required_extras:
+            raise ValueError("Budget must allocate every required article extra.")
         self.keywords = _unique_strings(self.keywords)
         self.global_constraints = _unique_strings(self.global_constraints)
         self.coverage_requirements = _unique_strings(self.coverage_requirements)
