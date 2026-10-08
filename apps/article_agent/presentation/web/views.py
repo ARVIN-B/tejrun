@@ -2,6 +2,7 @@ from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import get_object_or_404, render
+from django.db import transaction
 from django.views.decorators.http import require_GET, require_POST
 
 from apps.article_agent.models import Article, ArticleJob, JobStatus
@@ -40,7 +41,7 @@ def create_article_job(request):
         return JsonResponse({"success": False, "error": "Too many or overly long keywords."}, status=400)
     article = Article.objects.create(owner=request.user, title=title, word_count=word_count, headings=headings, keywords=keywords)
     job = ArticleJob.objects.create(article=article, total_sections=len(headings), request_payload={"title": title, "word_count": word_count, "headings": headings, "keywords": keywords})
-    task = generate_article_task.apply_async(args=[job.pk], queue="article_generation")
+    task = generate_article_task.apply_async(args=[job.pk, job.execution_version], queue="article_generation")
     job.celery_task_id = task.id; job.save(update_fields=["celery_task_id", "updated_at"])
     return JsonResponse({"success": True, "job_id": job.pk, "status": job.status}, status=201)
 
@@ -65,11 +66,19 @@ def cancel_job(request, job_id):
 @require_POST
 @login_required
 def retry_job(request, job_id):
-    job = _owned(request, job_id)
-    if job.status not in {JobStatus.FAILED, JobStatus.CANCELLED}: return JsonResponse({"success": False, "error": "This job cannot be retried."}, status=409)
-    job.status, job.progress, job.current_stage, job.error_message, job.error_code = JobStatus.QUEUED, 0, "Queued", "", ""
-    task = generate_article_task.apply_async(args=[job.pk], queue="article_generation")
-    job.celery_task_id = task.id; job.save(); return JsonResponse({"success": True, "status": job.status})
+    with transaction.atomic():
+        job = _owned(request, job_id)
+        job = ArticleJob.objects.select_for_update().get(pk=job.pk)
+        if job.status not in {JobStatus.FAILED, JobStatus.CANCELLED}:
+            return JsonResponse({"success": False, "error": "This job cannot be retried."}, status=409)
+        job.status, job.progress, job.current_stage, job.error_message, job.error_code = JobStatus.QUEUED, 0, "Queued", "", ""
+        job.execution_version += 1
+        job.completed_at = None
+        job.save(update_fields=["status", "progress", "current_stage", "error_message", "error_code", "execution_version", "completed_at", "updated_at"])
+        execution_version = job.execution_version
+    task = generate_article_task.apply_async(args=[job.pk, execution_version], queue="article_generation")
+    ArticleJob.objects.filter(pk=job.pk, execution_version=execution_version).update(celery_task_id=task.id)
+    return JsonResponse({"success": True, "status": JobStatus.QUEUED})
 
 
 @require_GET

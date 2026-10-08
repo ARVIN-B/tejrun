@@ -238,6 +238,10 @@ class ResearchData:
     claims: list[str] = field(default_factory=list)
     sources: list[str] = field(default_factory=list)
     confidence: float | None = None
+    mode: Literal["disabled", "optional", "required"] = "disabled"
+    status: Literal["disabled", "available", "no_results", "unavailable"] = "disabled"
+    provider: str = ""
+    error: str = ""
 
     def __post_init__(self) -> None:
         if self.confidence is not None and not 0 <= self.confidence <= 1:
@@ -247,6 +251,14 @@ class ResearchData:
         self.examples = _unique_strings(self.examples)
         self.claims = _unique_strings(self.claims)
         self.sources = _unique_strings(self.sources)
+        if self.mode not in {"disabled", "optional", "required"}:
+            raise ValueError("research mode is invalid.")
+        if self.status not in {"disabled", "available", "no_results", "unavailable"}:
+            raise ValueError("research status is invalid.")
+        if self.status == "available" and not self.sources:
+            raise ValueError("available research requires provenance sources.")
+        if self.status == "disabled" and self.mode != "disabled":
+            raise ValueError("only disabled research mode may use disabled status.")
 
 
 @dataclass(slots=True)
@@ -260,6 +272,9 @@ class ArticleMemory:
     avoid_repeating: list[str] = field(default_factory=list)
     style_notes: list[str] = field(default_factory=list)
     open_threads: list[str] = field(default_factory=list)
+    keyword_usage: list[str] = field(default_factory=list)
+    unresolved_claims: list[str] = field(default_factory=list)
+    research_notes: list[str] = field(default_factory=list)
 
     def normalized(self) -> ArticleMemory:
         """Return a normalized copy; budget enforcement belongs to MemoryUpdater."""
@@ -273,6 +288,9 @@ class ArticleMemory:
             avoid_repeating=_unique_strings(self.avoid_repeating),
             style_notes=_unique_strings(self.style_notes),
             open_threads=_unique_strings(self.open_threads),
+            keyword_usage=_unique_strings(self.keyword_usage),
+            unresolved_claims=_unique_strings(self.unresolved_claims),
+            research_notes=_unique_strings(self.research_notes),
         )
 
 
@@ -301,10 +319,16 @@ class ReviewIssue:
     type: str
     severity: Literal["low", "medium", "high", "critical"]
     description: str
+    affected_units: list[str] = field(default_factory=list)
+    recommendation: str = ""
 
     def __post_init__(self) -> None:
         self.type = _non_empty(self.type, "type")
         self.description = _non_empty(self.description, "description")
+        if self.severity not in {"low", "medium", "high", "critical"}:
+            raise ValueError("severity is invalid.")
+        self.affected_units = _unique_strings(self.affected_units)
+        self.recommendation = self.recommendation.strip()
 
 
 @dataclass(slots=True)
@@ -346,6 +370,8 @@ class QualityReport:
     tolerance: float
     checks: dict[str, bool] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    allocated_word_count: int = 0
+    unit_accounting: dict[str, dict[str, int | str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.target_word_count <= 0 or self.actual_word_count < 0:
@@ -353,10 +379,16 @@ class QualityReport:
         if not 0 <= self.tolerance <= 1:
             raise ValueError("tolerance must be between zero and one.")
         self.warnings = _unique_strings(self.warnings)
+        if self.allocated_word_count < 0:
+            raise ValueError("allocated_word_count must be zero or greater.")
 
     @property
     def relative_word_difference(self) -> float:
         return abs(self.target_word_count - self.actual_word_count) / self.target_word_count
+
+    @property
+    def word_delta(self) -> int:
+        return self.actual_word_count - self.target_word_count
 
 
 @dataclass(slots=True)

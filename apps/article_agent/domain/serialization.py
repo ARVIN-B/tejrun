@@ -151,6 +151,8 @@ def review_result_from_dict(value: object) -> ReviewResult:
                 type=_required(_mapping(item, "issue"), "type"),
                 severity=_required(_mapping(item, "issue"), "severity"),
                 description=_required(_mapping(item, "issue"), "description"),
+                affected_units=_string_list(_mapping(item, "issue"), "affected_units"),
+                recommendation=_mapping(item, "issue").get("recommendation", ""),
             )
             for item in raw_issues
         ]
@@ -175,6 +177,8 @@ def research_data_from_dict(value: object) -> ResearchData:
             claims=_string_list(data, "claims"),
             sources=_string_list(data, "sources"),
             confidence=data.get("confidence"),
+            mode=data.get("mode", "disabled"), status=data.get("status", "disabled"),
+            provider=data.get("provider", ""), error=data.get("error", ""),
         )
     except (TypeError, ValueError) as error:
         raise ContractValidationError(str(error)) from error
@@ -248,6 +252,8 @@ def quality_report_to_dict(report: QualityReport) -> dict[str, Any]:
         "tolerance": report.tolerance,
         "checks": report.checks,
         "warnings": report.warnings,
+        "allocated_word_count": report.allocated_word_count,
+        "unit_accounting": report.unit_accounting,
     }
 
 
@@ -260,6 +266,8 @@ def article_review_to_dict(review: ArticleReview) -> dict[str, Any]:
                 "type": issue.type,
                 "severity": issue.severity,
                 "description": issue.description,
+                "affected_units": issue.affected_units,
+                "recommendation": issue.recommendation,
             }
             for issue in review.findings
         ],

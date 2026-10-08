@@ -215,6 +215,18 @@ class DomainContractTests(unittest.TestCase):
         self.assertLessEqual(len(updated.section_summaries[-1]), 50)
         self.assertEqual(updated.claims_made, ["Use invalidation"])
 
+    def test_writer_context_selects_relevant_memory_and_preserves_unresolved_claims(self) -> None:
+        section = SectionPlan(0, "Caching", "Explain", ["cache invalidation"], 100, 99, 101, keywords=["cache"])
+        plan = ArticlePlan(
+            title="Caching", goal="Explain", audience="General", tone="Professional", language="en",
+            primary_topic="Caching", keywords=["cache"], sections=[section], budget=self._budget(1, 500),
+        )
+        memory = ArticleMemory(section_summaries=["database tuning", "cache invalidation strategy"], unresolved_claims=["verify source"])
+        context = ContextBuilder().build_section_context(plan, section, memory, ResearchData(), StyleProfile(language="en"))
+        payload = json.loads(context)
+        self.assertEqual(payload["memory"]["section_summaries"][0], "cache invalidation strategy")
+        self.assertEqual(payload["memory"]["unresolved_claims"], ["verify source"])
+
     def test_planner_allocates_the_complete_article_budget_before_writing(self) -> None:
         request = ArticleRequest(
             title="Distributed systems",

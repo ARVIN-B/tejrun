@@ -27,6 +27,31 @@ class JobStatus(models.TextChoices):
             cls.RENDERING, cls.CANCEL_REQUESTED,
         }
 
+    @classmethod
+    def can_transition(cls, current: str, target: str) -> bool:
+        """Explicit lifecycle rules; terminal state cannot be resurrected in-place."""
+        if current == target:
+            return True
+        if target == cls.CANCEL_REQUESTED:
+            return current in cls.active() - {cls.CANCEL_REQUESTED}
+        if target == cls.CANCELLED:
+            return current in cls.active()
+        if target == cls.FAILED:
+            return current in cls.active()
+        allowed = {
+            cls.QUEUED: {cls.PLANNING},
+            cls.PLANNING: {cls.RESEARCHING, cls.WRITING},
+            cls.RESEARCHING: {cls.WRITING},
+            cls.WRITING: {cls.REVIEWING, cls.FINAL_REVIEW},
+            cls.REVIEWING: {cls.REVISING, cls.WRITING, cls.FINAL_REVIEW},
+            cls.REVISING: {cls.REVIEWING, cls.WRITING},
+            cls.FINAL_REVIEW: {cls.EDITING, cls.QUALITY_CHECK},
+            cls.EDITING: {cls.QUALITY_CHECK},
+            cls.QUALITY_CHECK: {cls.RENDERING},
+            cls.RENDERING: {cls.COMPLETED},
+        }
+        return target in allowed.get(current, set())
+
 
 class Article(models.Model):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="articles")
@@ -58,6 +83,8 @@ class ArticleJob(models.Model):
     error_message = models.CharField(max_length=500, blank=True, default="")
     output_file = models.FileField(upload_to="article_outputs/%Y/%m/", blank=True)
     retry_count = models.PositiveSmallIntegerField(default=0)
+    execution_version = models.PositiveIntegerField(default=1)
+    checkpoint_payload = models.JSONField(default=dict, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -86,6 +113,7 @@ class ArticleSection(models.Model):
     heading = models.CharField(max_length=255)
     content = models.TextField(blank=True)
     review_payload = models.JSONField(default=dict, blank=True)
+    execution_version = models.PositiveIntegerField(default=1)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=("article", "position"), name="article_section_position_unique")]

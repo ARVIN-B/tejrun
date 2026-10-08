@@ -1,6 +1,7 @@
 from pathlib import Path
 import os
 import sys
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,8 +13,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-insecure-development-only-change-me")
+# A deployment must explicitly provide a strong secret. Tests receive an
+# isolated ephemeral key so they never weaken production configuration.
+_provided_secret = os.getenv("DJANGO_SECRET_KEY", "")
+if not _provided_secret or _provided_secret.startswith("django-insecure-") or len(_provided_secret) < 50:
+    if "test" in sys.argv:
+        SECRET_KEY = "test-only-article-agent-secret-key-not-for-production-123456789"
+    else:
+        raise ImproperlyConfigured("DJANGO_SECRET_KEY must be set to a strong secret outside tests.")
+else:
+    SECRET_KEY = _provided_secret
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DEBUG", "False").lower() == "true"
@@ -147,16 +156,23 @@ ARTICLE_AGENT_MAX_KEYWORD_LENGTH = int(os.getenv("ARTICLE_AGENT_MAX_KEYWORD_LENG
 ARTICLE_AGENT_MAX_SECTION_REVISIONS = int(os.getenv("ARTICLE_AGENT_MAX_SECTION_REVISIONS", "2"))
 ARTICLE_AGENT_WORD_COUNT_TOLERANCE = float(os.getenv("ARTICLE_AGENT_WORD_COUNT_TOLERANCE", "0.25"))
 ARTICLE_AGENT_LLM_TIMEOUT_SECONDS = int(os.getenv("ARTICLE_AGENT_LLM_TIMEOUT_SECONDS", "120"))
+ARTICLE_AGENT_RESEARCH_MODE = os.getenv("ARTICLE_AGENT_RESEARCH_MODE", "disabled").lower()
+ARTICLE_AGENT_RESEARCH_TIMEOUT_SECONDS = int(os.getenv("ARTICLE_AGENT_RESEARCH_TIMEOUT_SECONDS", "20"))
+ARTICLE_AGENT_GROQ_CONCURRENCY = int(os.getenv("ARTICLE_AGENT_GROQ_CONCURRENCY", "4"))
+ARTICLE_AGENT_GROQ_REQUESTS_PER_MINUTE = int(os.getenv("ARTICLE_AGENT_GROQ_REQUESTS_PER_MINUTE", "30"))
+ARTICLE_AGENT_GROQ_TOKENS_PER_MINUTE = int(os.getenv("ARTICLE_AGENT_GROQ_TOKENS_PER_MINUTE", "30000"))
 
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
-MAILERS = {
-    "default": {
-        "BACKEND": "django.core.mail.backends.console.EmailBackend",
-    },
-}
+EMAIL_BACKEND = os.getenv("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
+EMAIL_HOST = os.getenv("EMAIL_HOST", "")
+EMAIL_PORT = int(os.getenv("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "true").lower() == "true"
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "no-reply@example.invalid")
 
 
 if DEBUG:
@@ -205,3 +221,5 @@ if not DEBUG and "test" not in sys.argv:
     SECURE_HSTS_PRELOAD = True
     SECURE_CONTENT_TYPE_NOSNIFF = True
     SECURE_REFERRER_POLICY = "same-origin"
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    X_FRAME_OPTIONS = "DENY"

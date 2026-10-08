@@ -1,7 +1,9 @@
 import asyncio
 import os
+import math
 
 from django.conf import settings
+from apps.article_agent.infrastructure.rate_limit import RateLimitPolicy, RedisGroqLimiter
 
 from autogen_core import CancellationToken
 from autogen_core.models import UserMessage
@@ -22,22 +24,26 @@ class GroqClient:
                 "structured_output": False,
             },
         )
-
-    async def generate(self, prompt: str) -> str:
-        result = await asyncio.wait_for(
-            self.model_client.create(
-                messages=[
-                    UserMessage(
-                        content=prompt,
-                        source="user",
-                    )
-                ],
-                cancellation_token=CancellationToken(),
-            ),
-            timeout=settings.ARTICLE_AGENT_LLM_TIMEOUT_SECONDS,
+        self.limiter = RedisGroqLimiter.from_url(
+            settings.REDIS_URL,
+            RateLimitPolicy(concurrency=settings.ARTICLE_AGENT_GROQ_CONCURRENCY,
+                            requests_per_window=settings.ARTICLE_AGENT_GROQ_REQUESTS_PER_MINUTE,
+                            tokens_per_window=settings.ARTICLE_AGENT_GROQ_TOKENS_PER_MINUTE),
         )
 
-        return result.content
+    async def generate(self, prompt: str) -> str:
+        await self.limiter.reserve(max(1, math.ceil(len(prompt) / 4)))
+        try:
+            result = await asyncio.wait_for(
+                self.model_client.create(
+                    messages=[UserMessage(content=prompt, source="user")],
+                    cancellation_token=CancellationToken(),
+                ), timeout=settings.ARTICLE_AGENT_LLM_TIMEOUT_SECONDS,
+            )
+            return result.content
+        finally:
+            await self.limiter.release()
 
     async def close(self):
         await self.model_client.close()
+        await self.limiter.close()

@@ -30,6 +30,8 @@ class MemoryUpdater:
         examples: list[str] | None = None,
         terms: list[str] | None = None,
         open_threads: list[str] | None = None,
+        unresolved_claims: list[str] | None = None,
+        research_notes: list[str] | None = None,
     ) -> ArticleMemory:
         summary = self._summarize(draft.content)
         updated = ArticleMemory(
@@ -42,6 +44,9 @@ class MemoryUpdater:
             avoid_repeating=[*memory.avoid_repeating, *section.key_points],
             style_notes=list(memory.style_notes),
             open_threads=[*memory.open_threads, *(open_threads or [])],
+            keyword_usage=[*memory.keyword_usage, *(keyword for keyword in section.keywords if keyword.casefold() in draft.content.casefold())],
+            unresolved_claims=[*memory.unresolved_claims, *(unresolved_claims or [])],
+            research_notes=[*memory.research_notes, *(research_notes or [])],
         ).normalized()
         return self._enforce_budget(updated)
 
@@ -59,6 +64,9 @@ class MemoryUpdater:
             avoid_repeating=bounded(memory.avoid_repeating),
             style_notes=bounded(memory.style_notes),
             open_threads=bounded(memory.open_threads),
+            keyword_usage=bounded(memory.keyword_usage),
+            unresolved_claims=bounded(memory.unresolved_claims),
+            research_notes=bounded(memory.research_notes),
         )
 
     def _summarize(self, content: str) -> str:

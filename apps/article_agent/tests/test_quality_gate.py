@@ -40,7 +40,17 @@ class QualityGateTests(SimpleTestCase):
         self.assertFalse(report.passed)
         self.assertFalse(report.checks["keywords_covered"])
 
+    def test_keyword_validation_normalizes_persian_zero_width_characters(self) -> None:
+        request = ArticleRequest(title="Topic", word_count=20, headings=["One", "Two"], keywords=["سلام‌دنیا"], language="en")
+        sections = [SectionDraft(0, "One", "سلام دنیا one two"), SectionDraft(1, "Two", "five six seven eight")]
+        self.assertTrue(self.gate.evaluate(request, sections, self.payload, [], True).checks["keywords_covered"])
+
     def test_faq_count_must_be_exactly_four(self) -> None:
         payload = {**self.payload, "FAQ": [{"question": "q", "answer": "a"}] * 3}
         report = self.gate.evaluate(self.request, self.sections, payload, [], True)
         self.assertFalse(report.passed)
+
+    def test_failed_article_review_blocks_completion(self) -> None:
+        report = self.gate.evaluate(self.request, self.sections, self.payload, [], True, article_review_passed=False)
+        self.assertFalse(report.passed)
+        self.assertFalse(report.checks["article_review_passed"])
