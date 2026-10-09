@@ -320,53 +320,7 @@ class ArticlePipeline:
                 "applications", WordCounter.count_text(payload["applications"])
             )
         else:
-            # faq_text = await budget_manager.generate_and_accept(
-            #     "faq",
-            #     lambda: self.supplement_writer.generate(plan, memory, "faq"),
-            #     lambda generated, allocation: self.supplement_writer.repair(
-            #         plan, memory, "faq", generated, allocation
-            #     ),
-            #     count=WordCounter.count_faq_text,
-            # )
-            
-            
-            
-            # faq_allocation = budget_manager.reserve("faq")
-            # faq_entries: list[dict[str, str]] | None = None
 
-            # try:
-            #     for attempt in range(budget_manager.max_repairs + 1):
-            #         faq_entries = await self.supplement_writer.generate_faq(
-            #             plan,
-            #             memory,
-            #             faq_allocation,
-            #         )
-
-            #         faq_words = WordCounter.count_faq(faq_entries)
-
-            #         if (
-            #             faq_allocation.minimum_words
-            #             <= faq_words
-            #             <= faq_allocation.maximum_words
-            #         ):
-            #             budget_manager.accept("faq", faq_words)
-            #             break
-
-            #         if attempt == budget_manager.max_repairs:
-            #             raise BudgetError(
-            #                 f"unit_budget_unsatisfied:faq:{faq_words}"
-            #             )
-
-            #     if faq_entries is None:
-            #         raise BudgetError("faq_generation_failed")
-
-            # except BaseException:
-            #     if faq_allocation.status == "reserved":
-            #         faq_allocation.status = "planned"
-            #         plan.budget.reserved_words -= faq_allocation.target_words
-            #     raise
-            
-            
             faq_allocation = budget_manager.reserve("faq")
 
             faq_entries = await self.supplement_writer.generate_faq(
@@ -380,17 +334,7 @@ class ArticlePipeline:
                 "faq",
                 WordCounter.count_faq(faq_entries),
             )
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
-            
+
             payload = {
                 "conclusion": await budget_manager.generate_and_accept(
                     "conclusion",
@@ -453,26 +397,61 @@ class ArticlePipeline:
                 WordCounter.count_text(repaired_content),
             )
             await self.persist_section(section, {"edited": True})
+            
+            
+            
+            
+            
+            
         for index in edited_indexes:
             section = edited[index]
+
             section, review = await self._review_with_revisions(
-                plan, plan.sections[index], section, memory, style, 90
+                plan,
+                plan.sections[index],
+                section,
+                memory,
+                style,
+                90,
             )
-            repaired_content = await budget_manager.repair_accepted(
-                f"section:{index}",
-                section.content,
-                lambda generated, allocation: self.writer.repair(
-                    plan, plan.sections[index], generated, allocation, style
-                ),
-            )
-            section.content, section.word_count = (
-                repaired_content,
-                WordCounter.count_text(repaired_content),
-            )
+
+            # بررسی نهایی باید روی همان متنی انجام شود که ذخیره می‌شود.
+            # بنابراین بعد از Review دیگر repair_accepted اجرا نمی‌کنیم.
+            section.word_count = WordCounter.count_text(section.content)
+
             edited[index] = section
             post_edit_reviews[index] = review
+
+            await self.persist_section(
+                section,
+                {
+                    "edited": True,
+                    "passed": review.passed,
+                    "score": review.score,
+                    "required_fixes": review.required_fixes,
+                    "issues": [asdict(issue) for issue in review.issues],
+                },
+            )
+
             if not review.passed:
-                raise PipelineQualityError(f"edited_section_review_failed:{index}")
+                raise PipelineQualityError(
+                    f"edited_section_review_failed:{index} | "
+                    f"score={review.score} | "
+                    f"required_fixes={review.required_fixes!r} | "
+                    f"issues={[asdict(issue) for issue in review.issues]!r}"
+                )
+
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
         await self.persist_plan(plan)
         final_article_review = article_review
         if edited_indexes:
@@ -532,12 +511,21 @@ class ArticlePipeline:
             )
             try:
                 review = await self.reviewer.review(plan, section, draft, memory, style)
-            except ValueError:
+            except ValueError as exc:
+                import logging
+
+                logging.getLogger(__name__).exception(
+                    "Section review parsing failed for section %s: %s",
+                    section.index + 1,
+                    exc,
+                )
+
                 review = ReviewResult(
                     passed=False,
                     score=0,
                     required_fixes=[
-                        "Return a valid structured review and address the section budget and content requirements."
+                        f"Reviewer response parsing failed: {exc}",
+                        "Return a valid structured review and address the section budget and content requirements.",
                     ],
                 )
             if review.passed:

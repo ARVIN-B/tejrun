@@ -5,6 +5,7 @@ contracts and the shared provider adapter; they do not know about Django.
 """
 
 from __future__ import annotations
+import logging
 
 import json
 import os
@@ -122,7 +123,24 @@ def _json_object(raw: str) -> dict:
     start, end = candidate.find("{"), candidate.rfind("}")
     if start < 0 or end < start:
         raise ValueError("The model did not return a JSON object.")
-    data = json.loads(candidate[start : end + 1])
+    json_text = candidate[start : end + 1]
+
+    try:
+        data = json.loads(json_text)
+    except json.JSONDecodeError as exc:
+        logger = logging.getLogger(__name__)
+
+        logger.error(
+            "Invalid JSON from LLM | line=%s column=%s | near=%r",
+            exc.lineno,
+            exc.colno,
+            json_text[max(0, exc.pos - 150):exc.pos + 150],
+        )
+        raise
+
+
+
+
     if not isinstance(data, dict):
         raise ValueError("The model JSON response must be an object.")
     return data
@@ -208,7 +226,30 @@ class SectionWriter:
         ).strip()
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 class SectionReviewer:
+    """
+    LLM is used only to produce free-form critique text.
+    All structured decisions (passed, score, issues list) are made deterministically in code.
+    """
+
     def __init__(self, llm: TextGenerator, context_builder: ContextBuilder) -> None:
         self.llm, self.context_builder = llm, context_builder
 
@@ -223,21 +264,101 @@ class SectionReviewer:
         context = self.context_builder.build_review_context(
             plan, section, draft.content, memory, style
         )
+
         prompt = (
-            "Review this one section for relevance, completeness, correctness concerns, repetition, "
-            "usefulness, style, heading alignment, and natural keyword use. Return STRICT JSON only: "
-            '{"passed":bool,"score":0-10,"issues":[{"type":str,"severity":"low|medium|high|critical","description":str}],'
-            '"strengths":[str],"required_fixes":[str]}.\n\n' + context
+            "You are reviewing one article section. Write a clear, professional critique in plain text.\n"
+            "Focus on: relevance to the heading, completeness of the topic, factual concerns, "
+            "repetition, usefulness for the reader, style consistency, and natural keyword use.\n\n"
+            "IMPORTANT RULES:\n"
+            "- Word count is advisory only. Never criticize length by itself.\n"
+            "- Do NOT invent facts or cite sources that are not present.\n"
+            "- End your response with a section titled exactly:\n"
+            "REQUIRED FIXES:\n"
+            "then list concrete, actionable fixes (one per line, starting with a dash). "
+            "If there are no real problems worth fixing, write exactly:\n"
+            "REQUIRED FIXES:\n- none\n\n"
+            "Write only the critique. No JSON, no markdown code fences, no process commentary.\n\n"
+            + context
         )
-        return review_result_from_dict(
-            _json_object(
-                await self.llm.generate(
-                    prompt,
-                    operation="section_review",
-                    output_tokens=settings.ARTICLE_AGENT_LLM_REVIEW_MAX_OUTPUT_TOKENS,
-                )
+
+        critique = (
+            await self.llm.generate(
+                prompt,
+                operation="section_review",
+                output_tokens=settings.ARTICLE_AGENT_LLM_REVIEW_MAX_OUTPUT_TOKENS,
             )
-        )
+        ).strip()
+
+        # ---------- Deterministic post-processing (no fragile parsing) ----------
+        required_fixes = self._extract_required_fixes(critique)
+
+        if not required_fixes:
+            score = 8.5
+            passed = True
+        elif len(required_fixes) <= 2:
+            score = 6.5
+            passed = False
+        else:
+            score = 4.5
+            passed = False
+
+        data = {
+            "passed": passed,
+            "score": score,
+            "issues": [
+                {
+                    "type": "editorial",
+                    "severity": "medium" if passed is False else "low",
+                    "description": critique[:800],
+                }
+            ]
+            if required_fixes
+            else [],
+            "strengths": [],
+            "required_fixes": required_fixes,
+        }
+        return review_result_from_dict(data)
+
+    @staticmethod
+    def _extract_required_fixes(critique: str) -> list[str]:
+        """Very tolerant extraction of the REQUIRED FIXES block. Never raises."""
+        marker = "REQUIRED FIXES:"
+        idx = critique.upper().find(marker)
+        if idx < 0:
+            cleaned = critique.strip()
+            return [cleaned] if len(cleaned) > 40 else []
+
+        block = critique[idx + len(marker) :].strip()
+        lines = []
+        for line in block.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith(("-", "•", "*")):
+                line = line[1:].strip()
+            if line.lower() in {"none", "n/a", "no fixes", "no required fixes"}:
+                return []
+            if line:
+                lines.append(line)
+        return lines
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
 
 
 class RevisionService:
@@ -276,7 +397,26 @@ class RevisionService:
         )
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 class ArticleReviewer:
+    """
+    Same principle: LLM only writes free-form findings.
+    Structured ArticleReview is built deterministically.
+    """
+
     def __init__(self, llm: TextGenerator, context_builder: ContextBuilder) -> None:
         self.llm, self.context_builder = llm, context_builder
 
@@ -324,30 +464,93 @@ class ArticleReviewer:
         context = self.context_builder._bounded_json(
             representation, self.context_builder.budgets.editor_context_limit
         )
+
         prompt = (
-            'Return STRICT JSON only: {"passed":bool,"score":0-10,"findings":[{"type":str,"severity":"low|medium|high|critical","description":str,"affected_units":["section:0"],"recommendation":str}],"required_fixes":[str]}. Each finding must identify affected units.\n\n'
+            "You are performing an article-level editorial review. Write a clear, professional critique in plain text.\n"
+            "Cover: overall coverage, consistency between sections, repetition, transitions, usefulness, "
+            "and whether the conclusion / FAQ / common mistakes / applications (if present) are adequate.\n\n"
+            "IMPORTANT RULES:\n"
+            "- Do not invent facts.\n"
+            "- End your response with a section titled exactly:\n"
+            "REQUIRED FIXES:\n"
+            "then list concrete actionable fixes (one per line, starting with a dash). "
+            "If nothing important needs changing, write exactly:\n"
+            "REQUIRED FIXES:\n- none\n\n"
+            "Also mention which section units are affected using the form section:N when relevant.\n"
+            "Write only the critique. No JSON, no markdown code fences.\n\n"
             + context
         )
-        data = _json_object(
+
+        critique = (
             await self.llm.generate(
                 prompt,
                 operation="article_review",
                 output_tokens=settings.ARTICLE_AGENT_LLM_REVIEW_MAX_OUTPUT_TOKENS,
             )
-        )
-        findings = [ReviewIssue(**item) for item in data.get("findings", [])]
+        ).strip()
+
+        required_fixes = SectionReviewer._extract_required_fixes(critique)
+
+        section_scores = {
+            draft.section_index: review.score
+            for draft, review in zip(sections, section_reviews, strict=True)
+        }
+        avg_score = sum(section_scores.values()) / max(1, len(section_scores))
+
+        if not required_fixes:
+            passed = True
+            score = min(9.0, avg_score + 0.5)
+        else:
+            passed = False
+            score = max(3.0, avg_score - 1.5)
+
+        findings = []
+        if required_fixes:
+            findings.append(
+                ReviewIssue(
+                    type="article_level",
+                    severity="medium",
+                    description=critique[:1200],
+                    affected_units=[
+                        f"section:{idx}" for idx in section_scores.keys()
+                    ],
+                    recommendation="Apply the listed required fixes.",
+                )
+            )
+
         return ArticleReview(
-            passed=bool(data["passed"]),
-            score=float(data["score"]),
+            passed=passed,
+            score=float(score),
             findings=findings,
-            section_scores={
-                int(key): float(value)
-                for key, value in data.get(
-                    "section_scores", representation["section_scores"]
-                ).items()
-            },
-            required_fixes=[str(item) for item in data.get("required_fixes", [])],
+            section_scores=section_scores,
+            required_fixes=required_fixes,
         )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class FinalEditor:
@@ -381,6 +584,7 @@ class FinalEditor:
                 for issue in review.findings
                 if f"section:{section.section_index}" in issue.affected_units
             ]
+            findings.extend(review.required_fixes)
             context = self.context_builder.build_editor_context(
                 plan,
                 plan.sections[section.section_index],

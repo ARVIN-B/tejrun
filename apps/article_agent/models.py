@@ -46,7 +46,8 @@ class JobStatus(models.TextChoices):
             cls.REVIEWING: {cls.REVISING, cls.WRITING, cls.FINAL_REVIEW},
             cls.REVISING: {cls.REVIEWING, cls.WRITING},
             cls.FINAL_REVIEW: {cls.EDITING, cls.QUALITY_CHECK},
-            cls.EDITING: {cls.QUALITY_CHECK},
+            # cls.EDITING: {cls.QUALITY_CHECK},
+            cls.EDITING: {cls.REVIEWING, cls.QUALITY_CHECK},
             cls.QUALITY_CHECK: {cls.RENDERING},
             cls.RENDERING: {cls.COMPLETED},
         }
