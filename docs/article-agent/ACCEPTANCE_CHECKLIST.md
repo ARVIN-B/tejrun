@@ -9,19 +9,19 @@
 - [x] applications allocated
 - [x] target sum equals requested total
 - [x] min/max feasibility proven
-- [ ] remaining-budget invariant enforced
+- [x] remaining-budget invariant enforced
 - [x] plan persisted first
 
 ## Runtime budget
-- [ ] canonical semantic word counter
-- [ ] Persian/Unicode tests
-- [ ] FAQ counted semantically
-- [ ] no dict/string counting
-- [ ] short output repaired
-- [ ] long output compressed
-- [ ] impossible output fails safely
-- [ ] edits revalidate budget
-- [ ] per-unit final accounting
+- [x] canonical semantic word counter
+- [x] Persian/Unicode tests
+- [x] FAQ counted semantically
+- [x] no dict/string counting
+- [x] short output repaired
+- [x] long output compressed
+- [x] impossible output fails safely
+- [x] edits revalidate budget
+- [x] per-unit final accounting
 
 ## Context/memory
 - [ ] structured bounded memory
@@ -31,20 +31,20 @@
 - [ ] large article tests
 
 ## Research
-- [ ] explicit mode
-- [ ] no fake research
-- [ ] real provider when enabled
-- [ ] provenance
-- [ ] failure policy
+- [x] explicit mode
+- [x] no fake research
+- [x] real provider when enabled
+- [x] provenance
+- [x] failure policy
 
 ## Review/revision
-- [ ] section reviewer sees real draft
-- [ ] article reviewer sees bounded real prose
-- [ ] repetition/contradiction/transition checks
-- [ ] findings identify affected units
-- [ ] targeted revision
-- [ ] targeted final editing
-- [ ] re-review after edits
+- [x] section reviewer sees real draft
+- [x] article reviewer sees bounded real prose
+- [x] repetition/contradiction/transition checks
+- [x] findings identify affected units
+- [x] targeted revision
+- [x] targeted final editing
+- [x] re-review after edits
 
 ## Natural writing
 - [ ] generic openings/transitions detected
@@ -56,13 +56,13 @@
 - [ ] no detector-evasion objective
 
 ## Rate limiting
-- [ ] Redis distributed coordination
-- [ ] concurrency protection
-- [ ] request/token reservation where possible
-- [ ] Retry-After
-- [ ] jittered backoff
-- [ ] bounded retries
-- [ ] concurrency tests
+- [x] Redis distributed coordination
+- [x] concurrency protection
+- [x] request/token reservation where possible
+- [x] Retry-After
+- [x] jittered backoff
+- [x] bounded retries
+- [x] concurrency tests
 
 ## Jobs
 - [ ] explicit state transitions
@@ -75,36 +75,36 @@
 - [ ] stale task cannot overwrite newer retry
 
 ## Quality
-- [ ] headings preserved/unique
-- [ ] no empty required unit
-- [ ] FAQ exactly 4
-- [ ] extras present
-- [ ] all budgets valid
-- [ ] critical findings block completion
-- [ ] failed reviews block completion
-- [ ] research requirements pass
-- [ ] normalized keyword validation
-- [ ] final report persisted
+- [x] headings preserved/unique
+- [x] no empty required unit
+- [x] FAQ exactly 4
+- [x] extras present
+- [x] all budgets valid
+- [x] critical findings block completion
+- [x] failed reviews block completion
+- [x] research requirements pass
+- [x] normalized keyword validation
+- [x] final report persisted
 
 ## DOCX/UI/Security
-- [ ] real valid DOCX
-- [ ] title/headings/order
-- [ ] bold headings
-- [ ] Persian RTL
-- [ ] B Nazanin configured
-- [ ] FAQ/extras
-- [ ] Unicode
-- [ ] polished dashboard UI
-- [ ] responsive/modal/validation
-- [ ] live status/progress
-- [ ] cancel/retry/download
-- [ ] loading/error/empty/accessibility
-- [ ] no silent production secret
+- [x] real valid DOCX
+- [x] title/headings/order
+- [x] bold headings
+- [x] Persian RTL
+- [x] B Nazanin configured
+- [x] FAQ/extras
+- [x] Unicode
+- [x] polished dashboard UI
+- [x] responsive/modal/validation
+- [x] live status/progress
+- [x] cancel/retry/download
+- [x] loading/error/empty/accessibility
+- [x] no silent production secret
 - [ ] ownership/file authorization
-- [ ] CSRF/security headers
+- [x] CSRF/security headers
 - [ ] no secret leakage
 - [ ] reproducible dependencies
-- [ ] clean migrations
+- [x] clean migrations
 
 ## Verification
 - [ ] Django checks

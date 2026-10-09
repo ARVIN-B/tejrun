@@ -16,43 +16,43 @@ Mark `DONE` only after evidence.
 - [x] tests for 500/1000/5000/10000/20000 words and varied heading counts
 
 ## M2 Runtime budget
-- [ ] canonical WordCounter
-- [ ] BudgetManager
-- [ ] reserve/generate/measure/repair/commit
-- [ ] short/long/impossible output tests
-- [ ] final per-unit accounting
+- [x] canonical WordCounter
+- [x] BudgetManager
+- [x] reserve/generate/measure/repair/commit
+- [x] short/long/impossible output tests
+- [x] final per-unit accounting
 
 ## M3 Durable/idempotent execution
-- [ ] persist checkpoints
-- [ ] execution/task versioning
-- [ ] duplicate-task protection
-- [ ] resume after mid-pipeline failure
-- [ ] render failure resumes without regenerating article
+- [x] persist checkpoints
+- [x] execution/task versioning
+- [x] duplicate-task protection
+- [x] resume after mid-pipeline failure
+- [x] render failure resumes without regenerating article
 
 ## M4 Context/memory
-- [ ] structured memory expansion
-- [ ] relevance selection
-- [ ] field-level compaction
+- [x] structured memory expansion
+- [x] relevance selection
+- [x] field-level compaction
 - [ ] large article/context tests
 
 ## M5 Research
-- [ ] explicit modes
-- [ ] real provider when enabled
-- [ ] provenance
-- [ ] failure policy
-- [ ] disabled mode is explicit
+- [x] explicit modes
+- [x] real provider when enabled
+- [x] provenance
+- [x] failure policy
+- [x] disabled mode is explicit
 
 ## M6 Section review/revision
-- [ ] strict schema
-- [ ] budget-aware review
-- [ ] targeted revision
-- [ ] re-review
+- [x] strict schema
+- [x] budget-aware review
+- [x] targeted revision
+- [x] re-review
 
 ## M7 Article review
-- [ ] bounded real-prose review context
-- [ ] repetition/contradiction/transitions/coverage
-- [ ] affected-unit findings
-- [ ] extras review
+- [x] bounded real-prose review context
+- [x] repetition/contradiction/transitions/coverage
+- [x] affected-unit findings
+- [x] extras review
 
 ## M8 Natural writing
 - [ ] deterministic style analyzer
@@ -61,23 +61,23 @@ Mark `DONE` only after evidence.
 - [ ] regression fixtures
 
 ## M9 Selective final editor
-- [ ] affected units only
-- [ ] re-review
-- [ ] budget preservation
+- [x] affected units only
+- [x] re-review
+- [x] budget preservation
 
 ## M10 Redis/Groq limiter
-- [ ] distributed request/concurrency coordination
-- [ ] token reservation/estimation where possible
-- [ ] Retry-After
-- [ ] exponential backoff + jitter
-- [ ] concurrency tests
+- [x] distributed request/concurrency coordination
+- [x] token reservation/estimation where possible
+- [x] Retry-After
+- [x] exponential backoff + jitter
+- [x] concurrency tests
 
 ## M11 Quality gate
-- [ ] all invariants
-- [ ] FAQ exactly 4
-- [ ] semantic counting
-- [ ] normalized keyword validation
-- [ ] critical finding handling
+- [x] all invariants
+- [x] FAQ exactly 4
+- [x] semantic counting
+- [x] normalized keyword validation
+- [x] critical finding handling
 
 ## M12 Job lifecycle
 - [ ] state transition rules
@@ -86,24 +86,24 @@ Mark `DONE` only after evidence.
 - [ ] stale-task protection
 
 ## M13 DOCX
-- [ ] RTL
-- [ ] B Nazanin
-- [ ] title/headings/FAQ/extras
-- [ ] Unicode/open verification
+- [x] RTL
+- [x] B Nazanin
+- [x] title/headings/FAQ/extras
+- [x] Unicode/open verification
 
 ## M14 UI
-- [ ] dashboard integration
-- [ ] polished responsive UI
-- [ ] modal/validation
-- [ ] live status/progress
-- [ ] cancel/retry/download
-- [ ] loading/error/empty/accessibility
+- [x] dashboard integration
+- [x] polished responsive UI
+- [x] modal/validation
+- [x] live status/progress
+- [x] cancel/retry/download
+- [x] loading/error/empty/accessibility
 
 ## M15 Production hardening
-- [ ] required production secret
+- [x] required production secret
 - [ ] dependencies reproducible
-- [ ] security settings
-- [ ] migrations
+- [x] security settings
+- [x] migrations
 - [ ] logging/observability
 
 ## M16 Adversarial verification

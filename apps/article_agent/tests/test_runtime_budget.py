@@ -42,6 +42,26 @@ class BudgetManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manager.budget.consumed_words, 0)
         self.assertEqual(manager.budget.allocation_for("section:0").status, "planned")
 
+    async def test_configured_repair_budget_can_recover_after_three_short_responses(self) -> None:
+        """A provider that initially truncates output must get all bounded repairs."""
+        manager = BudgetManager(budget(), max_repairs=3)
+        repair_calls = 0
+
+        async def generate():
+            return "short"
+
+        async def repair(_output, _allocation):
+            nonlocal repair_calls
+            repair_calls += 1
+            if repair_calls < 3:
+                return "still short"
+            return "recovered " * 45
+
+        accepted = await manager.generate_and_accept("section:0", generate, repair)
+        self.assertEqual(repair_calls, 3)
+        self.assertEqual(WordCounter.count_text(accepted), 45)
+        self.assertEqual(manager.budget.allocation_for("section:0").status, "accepted")
+
     def test_reserve_rejects_state_that_would_starve_remaining_units(self) -> None:
         plan = budget()
         plan.consumed_words = 50
@@ -67,4 +87,3 @@ class BudgetManagerTests(unittest.IsolatedAsyncioTestCase):
         output = await manager.repair_accepted("section:0", "too short", repair)
         self.assertEqual(WordCounter.count_text(output), 45)
         self.assertEqual(manager.budget.allocation_for("section:0").generated_words, 45)
-

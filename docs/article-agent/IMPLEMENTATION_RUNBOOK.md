@@ -34,3 +34,28 @@ At every session boundary update:
 If context/account/model changes, read the repository docs and continue from the first unchecked item. Never restart from scratch.
 
 Final report must list changed files, migrations, exact commands/results, smoke tests, load checks and limitations. If a required verification could not run, the system is NOT DONE.
+
+## Celery article-job contract
+
+`apps.article_agent.tasks.generate_article_task` is a bound Celery task with
+exactly one broker argument: `job_id`. The HTTP flow persists the ArticleJob
+and its Celery task ID, then publishes `apply_async(args=[job_id], task_id=…)`.
+The task ID is transport metadata for stale-task rejection, never a second task
+argument. Retries use `self.retry()` without replacement positional arguments,
+so they retain the same one-argument contract.
+
+## Budgeted provider output configuration
+
+`ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS` (default `8192`) is passed explicitly
+to the Groq-compatible client; do not rely on a provider's short default
+completion length. `ARTICLE_AGENT_MAX_BUDGET_REPAIRS` (default `3`) bounds
+repair attempts. A unit remains rejected if it is still outside its persisted
+minimum/maximum allocation after those attempts.
+
+## Current execution status (2026-10-09)
+
+- M1/M2 are verified by planner/runtime-budget tests, including deliberate starvation, short/long repair and impossible-output rejection.
+- M3 has versioned execution claims, stale-write guards and persisted section/extras checkpoints; renderer-resume is verified without regenerating prose.
+- M4/M5/M10/M13/M14 have implementation plus targeted tests. Large-context and live Redis integration verification remain pending.
+- Latest local evidence: `.venv\\Scripts\\python.exe manage.py test apps.article_agent.tests --keepdb --verbosity 1` (63 passing), `.venv\\Scripts\\python.exe manage.py check` (pass), and `.venv\\Scripts\\python.exe manage.py makemigrations --check --dry-run` (no changes). Production deployment verification remains a server-side operation.
+- Next exact action: add renderer-failure resume coverage, then complete section/article review, style and lifecycle adversarial verification.

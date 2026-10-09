@@ -36,7 +36,7 @@ class FakeLlm:
             return "conclusion " * 160
         if "Repair this article unit" in prompt:
             return "practical " * 125
-        if "Repair this section's length only" in prompt or "Repair this article unit" in prompt:
+        if "Repair the entire section's length" in prompt or "Repair this article unit" in prompt:
             return "repaired budget compliant section content " * 55
         if "Review article-level" in prompt:
             return '{"passed":true,"score":9,"findings":[],"required_fixes":[]}'

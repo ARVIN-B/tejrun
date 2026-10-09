@@ -4,6 +4,7 @@ from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.db import transaction
 from django.views.decorators.http import require_GET, require_POST
+from uuid import uuid4
 
 from apps.article_agent.models import Article, ArticleJob, JobStatus
 from apps.article_agent.tasks import generate_article_task
@@ -20,6 +21,21 @@ def _keywords(raw):
 
 def _owned(request, job_id):
     return get_object_or_404(ArticleJob.objects.select_related("article"), pk=job_id, article__owner=request.user)
+
+
+def _enqueue_article_job(job_id: int, execution_version: int) -> str:
+    """Persist Celery's identity before publishing its one-argument task.
+
+    A worker only receives ``job_id``. Its Celery request ID is compared with
+    this stored identity before work begins, which rejects stale retries
+    without expanding the broker contract.
+    """
+    task_id = str(uuid4())
+    updated = ArticleJob.objects.filter(pk=job_id, execution_version=execution_version).update(celery_task_id=task_id)
+    if updated != 1:
+        raise RuntimeError("Unable to enqueue the current article job execution.")
+    generate_article_task.apply_async(args=[job_id], task_id=task_id, queue="article_generation")
+    return task_id
 
 
 @login_required
@@ -41,8 +57,7 @@ def create_article_job(request):
         return JsonResponse({"success": False, "error": "Too many or overly long keywords."}, status=400)
     article = Article.objects.create(owner=request.user, title=title, word_count=word_count, headings=headings, keywords=keywords)
     job = ArticleJob.objects.create(article=article, total_sections=len(headings), request_payload={"title": title, "word_count": word_count, "headings": headings, "keywords": keywords})
-    task = generate_article_task.apply_async(args=[job.pk, job.execution_version], queue="article_generation")
-    job.celery_task_id = task.id; job.save(update_fields=["celery_task_id", "updated_at"])
+    _enqueue_article_job(job.pk, job.execution_version)
     return JsonResponse({"success": True, "job_id": job.pk, "status": job.status}, status=201)
 
 
@@ -76,8 +91,7 @@ def retry_job(request, job_id):
         job.completed_at = None
         job.save(update_fields=["status", "progress", "current_stage", "error_message", "error_code", "execution_version", "completed_at", "updated_at"])
         execution_version = job.execution_version
-    task = generate_article_task.apply_async(args=[job.pk, execution_version], queue="article_generation")
-    ArticleJob.objects.filter(pk=job.pk, execution_version=execution_version).update(celery_task_id=task.id)
+    _enqueue_article_job(job.pk, execution_version)
     return JsonResponse({"success": True, "status": JobStatus.QUEUED})
 
 

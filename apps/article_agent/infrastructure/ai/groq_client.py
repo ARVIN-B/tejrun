@@ -23,6 +23,9 @@ class GroqClient:
                 "family": "unknown",
                 "structured_output": False,
             },
+            # Providers often default to a short completion limit. The
+            # ArticleBudget can require substantially more prose per unit.
+            max_tokens=settings.ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS,
         )
         self.limiter = RedisGroqLimiter.from_url(
             settings.REDIS_URL,
@@ -32,7 +35,11 @@ class GroqClient:
         )
 
     async def generate(self, prompt: str) -> str:
-        await self.limiter.reserve(max(1, math.ceil(len(prompt) / 4)))
+        # Reserve both prompt and configured completion capacity, because the
+        # latter is the portion that caused short provider output in practice.
+        await self.limiter.reserve(
+            max(1, math.ceil(len(prompt) / 4)) + settings.ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS
+        )
         try:
             result = await asyncio.wait_for(
                 self.model_client.create(

@@ -1,7 +1,8 @@
 import tempfile
 from io import BytesIO
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
+from celery.exceptions import Retry
 from django.contrib.auth import get_user_model
 from django.test import TransactionTestCase, override_settings
 
@@ -39,9 +40,27 @@ class ExecutionPathTests(TransactionTestCase):
         self.assertTrue(self.job.output_file.name)
 
     @patch("apps.article_agent.tasks.ArticleJobExecutionService.execute")
-    def test_celery_task_invokes_execution_service(self, execute) -> None:
+    def test_celery_task_invokes_execution_service_with_job_id_only(self, execute) -> None:
         generate_article_task.apply(args=(self.job.pk,)).get()
-        execute.assert_called_once_with(self.job.pk, self.job.execution_version)
+        execute.assert_called_once_with(self.job.pk, task_id=ANY)
+
+    def test_task_contract_has_exactly_one_broker_argument(self) -> None:
+        import inspect
+        parameters = list(inspect.signature(generate_article_task.run).parameters)
+        # ``run`` is already bound by Celery, so ``self`` is not exposed to
+        # callers. The broker contract is exactly one positional argument.
+        self.assertEqual(parameters, ["job_id"])
+
+    @override_settings(ARTICLE_AGENT_MAX_RETRIES=1)
+    @patch("apps.article_agent.tasks.generate_article_task.retry", side_effect=Retry())
+    @patch("apps.article_agent.tasks.ArticleJobExecutionService.execute", side_effect=TimeoutError("timeout"))
+    def test_provider_retry_reuses_the_one_job_id_task_contract(self, execute, retry) -> None:
+        self.job.celery_task_id = "retry-contract-task"
+        self.job.save(update_fields=["celery_task_id"])
+        generate_article_task.apply(args=(self.job.pk,), task_id="retry-contract-task")
+        execute.assert_called_once_with(self.job.pk, task_id="retry-contract-task")
+        self.assertEqual(retry.call_args.args, ())
+        self.assertIn("countdown", retry.call_args.kwargs)
 
     @patch("apps.article_agent.application.job_execution.GroqClient")
     @patch("apps.article_agent.application.job_execution.ArticlePipeline")
@@ -52,8 +71,8 @@ class ExecutionPathTests(TransactionTestCase):
             document=b"docx", quality_report=QualityReport(True, 100, 100, 0.25),
         ))
         service = ArticleJobExecutionService()
-        service.execute(self.job.pk, self.job.execution_version)
-        service.execute(self.job.pk, self.job.execution_version)
+        service.execute(self.job.pk)
+        service.execute(self.job.pk)
         pipeline_class.return_value.run.assert_awaited_once()
 
     def test_stale_execution_cannot_update_current_job_stage(self) -> None:
@@ -61,6 +80,19 @@ class ExecutionPathTests(TransactionTestCase):
         self.job.save(update_fields=["execution_version"])
         import asyncio
         asyncio.run(ArticleJobExecutionService._update_stage(self.job.pk, 1, JobStatus.WRITING, 50, "stale", 0))
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.status, JobStatus.QUEUED)
+
+    def test_stale_celery_task_identity_cannot_claim_current_job(self) -> None:
+        import asyncio
+        self.job.celery_task_id = "current-task"
+        self.job.save(update_fields=["celery_task_id"])
+        claimed = asyncio.run(
+            ArticleJobExecutionService._claim_execution(
+                self.job.pk, self.job.execution_version, "stale-task"
+            )
+        )
+        self.assertFalse(claimed)
         self.job.refresh_from_db()
         self.assertEqual(self.job.status, JobStatus.QUEUED)
 

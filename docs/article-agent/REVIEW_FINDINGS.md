@@ -2,6 +2,13 @@
 
 Every item must be fixed or disproven by code/tests. Similar class names do not count as implementation.
 
+## Resolved P0
+
+### Environment template contained usable credentials
+`.env.example` is a public configuration template, not a secret store. It now
+contains placeholders only, and `EnvironmentTemplateTests` prevents sensitive
+settings from acquiring usable values again.
+
 ## P0 confirmed
 
 ### 1. Full article budget is not planned

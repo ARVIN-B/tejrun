@@ -117,7 +117,9 @@ class ArticlePipeline:
         await self.update_stage("planning", 5, "Planning article", 0)
         plan = self.planner.create_plan(request)
         await self.persist_plan(plan)
-        budget_manager = BudgetManager(plan.budget)
+        budget_manager = BudgetManager(
+            plan.budget, max_repairs=settings.ARTICLE_AGENT_MAX_BUDGET_REPAIRS
+        )
         await self.update_stage("researching", 10, "Researching article", 0)
         research = await self.researcher.research(plan)
         memory = (initial_memory or ArticleMemory()).normalized()

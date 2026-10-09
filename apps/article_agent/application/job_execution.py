@@ -30,13 +30,13 @@ from apps.article_agent.models import ArticleJob, ArticleSection, JobStatus
 class ArticleJobExecutionService:
     """The sole controlled sync/async boundary used by the Celery task."""
 
-    def execute(self, job_id: int, execution_version: int | None = None) -> None:
-        asyncio.run(self._execute(job_id, execution_version))
+    def execute(self, job_id: int, *, task_id: str | None = None) -> None:
+        asyncio.run(self._execute(job_id, task_id))
 
-    async def _execute(self, job_id: int, expected_version: int | None) -> None:
+    async def _execute(self, job_id: int, expected_task_id: str | None) -> None:
         job = await sync_to_async(ArticleJob.objects.select_related("article").get)(pk=job_id)
-        execution_version = expected_version if expected_version is not None else job.execution_version
-        if not await self._claim_execution(job_id, execution_version):
+        execution_version = job.execution_version
+        if not await self._claim_execution(job_id, execution_version, expected_task_id):
             return
         job = await sync_to_async(ArticleJob.objects.select_related("article").get)(pk=job_id)
         article = job.article
@@ -91,11 +91,13 @@ class ArticleJobExecutionService:
             await sync_to_async(connections.close_all, thread_sensitive=True)()
 
     @staticmethod
-    async def _claim_execution(job_id: int, execution_version: int) -> bool:
+    async def _claim_execution(job_id: int, execution_version: int, expected_task_id: str | None) -> bool:
         def claim() -> bool:
             with transaction.atomic():
                 job = ArticleJob.objects.select_for_update().get(pk=job_id)
                 if job.execution_version != execution_version:
+                    return False
+                if expected_task_id and job.celery_task_id != expected_task_id:
                     return False
                 if job.status == JobStatus.CANCEL_REQUESTED:
                     job.status, job.current_stage = JobStatus.CANCELLED, "Cancelled"

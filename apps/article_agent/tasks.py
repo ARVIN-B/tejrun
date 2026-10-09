@@ -33,17 +33,28 @@ def _retry_delay(error: Exception, retry_number: int) -> int:
 
 
 @shared_task(bind=True, autoretry_for=(), queue="article_generation")
-def generate_article_task(self, job_id: int, execution_version: int | None = None) -> None:
-    if execution_version is None:
-        execution_version = ArticleJob.objects.only("execution_version").get(pk=job_id).execution_version
+def generate_article_task(self, job_id: int) -> None:
+    """Execute one persisted job. Broker contract: exactly one ``job_id``."""
+    task_id = self.request.id
     try:
-        ArticleJobExecutionService().execute(job_id, execution_version)
+        ArticleJobExecutionService().execute(job_id, task_id=task_id)
     except Exception as error:
         if _is_transient_provider_error(error) and self.request.retries < settings.ARTICLE_AGENT_MAX_RETRIES:
-            ArticleJob.objects.filter(pk=job_id, execution_version=execution_version).update(status=JobStatus.QUEUED, current_stage="Waiting to retry after provider rate limit", retry_count=self.request.retries + 1, updated_at=timezone.now())
+            ArticleJob.objects.filter(pk=job_id, celery_task_id=task_id).update(
+                status=JobStatus.QUEUED,
+                current_stage="Waiting to retry after provider rate limit",
+                retry_count=self.request.retries + 1,
+                updated_at=timezone.now(),
+            )
             countdown = _retry_delay(error, self.request.retries)
             logger.warning("Article job %s has a transient provider failure; retrying in %s seconds", job_id, countdown)
             raise self.retry(exc=error, countdown=countdown, max_retries=settings.ARTICLE_AGENT_MAX_RETRIES)
         logger.exception("Article job %s failed", job_id)
-        ArticleJob.objects.filter(pk=job_id, execution_version=execution_version).update(status=JobStatus.FAILED, current_stage="Failed", error_code="provider_error" if _is_transient_provider_error(error) else "generation_error", error_message="Article generation encountered a temporary problem. Please retry.", updated_at=timezone.now())
+        ArticleJob.objects.filter(pk=job_id, celery_task_id=task_id).update(
+            status=JobStatus.FAILED,
+            current_stage="Failed",
+            error_code="provider_error" if _is_transient_provider_error(error) else "generation_error",
+            error_message="Article generation encountered a temporary problem. Please retry.",
+            updated_at=timezone.now(),
+        )
         raise
