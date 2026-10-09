@@ -52,6 +52,31 @@ completion length. `ARTICLE_AGENT_MAX_BUDGET_REPAIRS` (default `3`) bounds
 repair attempts. A unit remains rejected if it is still outside its persisted
 minimum/maximum allocation after those attempts.
 
+## Groq quota and routing configuration
+
+The Redis limiter is a local admission controller, not evidence of an HTTP
+response from Groq. `RateLimitExceeded` records one of the account/model
+concurrency, RPM, TPM, input-TPM or output-TPM dimensions. Its retry delay is
+derived from the blocking active lease or counter window. `ProviderRateLimitError`
+is emitted only after an actual HTTP 429 and preserves `Retry-After` when the
+provider supplied it.
+
+Every call reserves an UTF-8 conservative input estimate and a unit-specific
+maximum completion budget. Successful calls reconcile that reservation with
+provider usage metadata; unsuccessful/timed-out calls release only concurrency
+because provider token consumption is unknown. Account limits always apply.
+Optional model limits in `ARTICLE_AGENT_GROQ_MODEL_LIMITS` apply in addition,
+so changing model does not bypass an organization/project limit.
+
+`ARTICLE_AGENT_PRIMARY_MODEL` falls back to `LLM_MODEL` for compatibility.
+`ARTICLE_AGENT_FALLBACK_MODELS` and `ARTICLE_AGENT_REVIEW_MODEL` are opt-in;
+writing stays on the primary model until an eligible *model-scoped local*
+capacity rejection occurs. Provider-429 and transient-error fallback are
+disabled by default because those failures can be account-wide. Enable them
+only after confirming project permissions and quotas. Values for every quota
+must come from the exact Groq project/organization Limits view, not examples
+or published plan tables.
+
 ## Current execution status (2026-10-09)
 
 - M1/M2 are verified by planner/runtime-budget tests, including deliberate starvation, short/long repair and impossible-output rejection.

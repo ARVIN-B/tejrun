@@ -63,6 +63,8 @@
 - [x] jittered backoff
 - [x] bounded retries
 - [x] concurrency tests
+- [x] account-wide plus optional model-specific quotas
+- [x] internal limiter rejection distinct from provider HTTP 429
 
 ## Jobs
 - [ ] explicit state transitions

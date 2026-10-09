@@ -14,7 +14,7 @@ from apps.article_agent.domain import ArticleMemory, ArticleRequest, ReviewResul
 class ReviewRecoveryTests(SimpleTestCase):
     def test_malformed_review_is_converted_to_a_bounded_failed_review(self):
         class Llm:
-            async def generate(self, prompt):
+            async def generate(self, prompt, **_kwargs):
                 return "not json" if "Review this one section" in prompt else "word " * 100
 
         class Reviser:

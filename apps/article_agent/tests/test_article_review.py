@@ -11,7 +11,7 @@ class ArticleReviewTests(unittest.IsolatedAsyncioTestCase):
     async def test_article_reviewer_receives_real_prose_and_affected_units(self):
         class Llm:
             prompt = ""
-            async def generate(self, prompt):
+            async def generate(self, prompt, **_kwargs):
                 self.prompt = prompt
                 return '{"passed":false,"score":4,"findings":[{"type":"repetition","severity":"high","description":"Repeated opening","affected_units":["section:1"],"recommendation":"Replace the repeated opening."}],"required_fixes":["Fix repetition"]}'
         llm = Llm()
@@ -27,7 +27,7 @@ class ArticleReviewTests(unittest.IsolatedAsyncioTestCase):
     async def test_final_editor_edits_only_affected_section(self):
         class Llm:
             calls = 0
-            async def generate(self, _prompt):
+            async def generate(self, _prompt, **_kwargs):
                 self.calls += 1
                 return "edited prose " * 100
         llm = Llm()

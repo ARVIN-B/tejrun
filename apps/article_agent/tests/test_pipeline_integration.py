@@ -20,7 +20,7 @@ class FakeLlm:
         self.review_calls = 0
         self.prompts = []
 
-    async def generate(self, prompt: str) -> str:
+    async def generate(self, prompt: str, **_kwargs) -> str:
         self.prompts.append(prompt)
         if "Review this one section" in prompt:
             self.review_calls += 1

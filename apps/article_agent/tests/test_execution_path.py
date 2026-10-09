@@ -11,6 +11,8 @@ from apps.article_agent.application.job_execution import ArticleJobExecutionServ
 from apps.article_agent.domain import QualityReport
 from apps.article_agent.models import Article, ArticleJob, JobStatus
 from apps.article_agent.tasks import _is_rate_limited, _is_transient_provider_error, _retry_delay, generate_article_task
+from apps.article_agent.infrastructure.ai.groq_client import ProviderRateLimitError
+from apps.article_agent.infrastructure.rate_limit import RateLimitExceeded
 
 
 class ExecutionPathTests(TransactionTestCase):
@@ -114,6 +116,13 @@ class ExecutionPathTests(TransactionTestCase):
         self.assertTrue(_is_rate_limited(RuntimeError("HTTP 429 rate limit")))
         self.assertFalse(_is_rate_limited(RuntimeError("invalid request")))
 
+    def test_local_limiter_and_provider_429_remain_distinct(self) -> None:
+        local = RateLimitExceeded("model_tokens", 17)
+        provider = ProviderRateLimitError(model="primary", retry_after=9, detail="Http429")
+        self.assertTrue(_is_transient_provider_error(local))
+        self.assertTrue(_is_transient_provider_error(provider))
+        self.assertNotEqual(type(local), type(provider))
+
     @override_settings(ARTICLE_AGENT_RETRY_BACKOFF_SECONDS=10)
     @patch("apps.article_agent.tasks.random.randint", return_value=3)
     def test_transient_errors_use_jittered_provider_aware_backoff(self, randint) -> None:
@@ -122,3 +131,11 @@ class ExecutionPathTests(TransactionTestCase):
         self.assertEqual(_retry_delay(error, 0), 48)
         self.assertEqual(_retry_delay(RuntimeError("429"), 2), 43)
         self.assertEqual(randint.call_count, 2)
+
+    @override_settings(ARTICLE_AGENT_RETRY_BACKOFF_SECONDS=60)
+    @patch("apps.article_agent.tasks.random.randint", return_value=1)
+    def test_limiter_retry_delay_uses_blocking_quota_time(self, _randint) -> None:
+        self.assertEqual(_retry_delay(RateLimitExceeded("account_tokens", 11), 3), 12)
+        self.assertEqual(
+            _retry_delay(ProviderRateLimitError(model="primary", retry_after=7, detail="429"), 3), 8
+        )

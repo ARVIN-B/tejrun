@@ -9,6 +9,19 @@ Every item must be fixed or disproven by code/tests. Similar class names do not 
 contains placeholders only, and `EnvironmentTemplateTests` prevents sensitive
 settings from acquiring usable values again.
 
+## Resolved P1
+
+### Coarse Groq token reservation produced false internal exhaustion
+The prior limiter reserved the global output maximum for every request, used a
+single undifferentiated quota key and returned the request-counter TTL for all
+rejections. It could therefore reject section repair locally without a Groq
+HTTP 429. The limiter now reserves per-operation output capacity, enforces
+account plus optional model quotas atomically, distinguishes causes, uses
+active leases for concurrency retry timing and reconciles successful calls
+with provider usage. Unit tests cover quota dimensions, shared coordination,
+fallback bounds, 429 distinction and cleanup; real Redis/Groq verification is
+still required per deployment.
+
 ## P0 confirmed
 
 ### 1. Full article budget is not planned

@@ -71,6 +71,7 @@ Mark `DONE` only after evidence.
 - [x] Retry-After
 - [x] exponential backoff + jitter
 - [x] concurrency tests
+- [x] account/model-aware quotas and bounded configurable model routing
 
 ## M11 Quality gate
 - [x] all invariants

@@ -1,10 +1,21 @@
 from pathlib import Path
+import json
 import os
 import sys
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def _optional_positive_int_env(name: str) -> int | None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return None
+    value = int(raw)
+    if value <= 0:
+        raise ImproperlyConfigured(f"{name} must be a positive integer when configured.")
+    return value
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -175,13 +186,24 @@ ARTICLE_AGENT_LLM_TIMEOUT_SECONDS = int(
 ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS = int(
     os.getenv("ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS", "8192")
 )
+ARTICLE_AGENT_LLM_REVIEW_MAX_OUTPUT_TOKENS = int(
+    os.getenv("ARTICLE_AGENT_LLM_REVIEW_MAX_OUTPUT_TOKENS", "1024")
+)
+ARTICLE_AGENT_OUTPUT_TOKENS_PER_WORD = float(
+    os.getenv("ARTICLE_AGENT_OUTPUT_TOKENS_PER_WORD", "2.0")
+)
+ARTICLE_AGENT_OUTPUT_TOKEN_BUFFER = int(
+    os.getenv("ARTICLE_AGENT_OUTPUT_TOKEN_BUFFER", "128")
+)
 ARTICLE_AGENT_MAX_BUDGET_REPAIRS = int(
     os.getenv("ARTICLE_AGENT_MAX_BUDGET_REPAIRS", "3")
 )
-if ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS < 256:
+if ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS < 256 or ARTICLE_AGENT_LLM_REVIEW_MAX_OUTPUT_TOKENS < 64:
     raise ImproperlyConfigured(
-        "ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS must be at least 256."
+        "Article Agent LLM output limits are too small."
     )
+if ARTICLE_AGENT_OUTPUT_TOKENS_PER_WORD < 1 or ARTICLE_AGENT_OUTPUT_TOKEN_BUFFER < 0:
+    raise ImproperlyConfigured("Article Agent output-token estimation settings are invalid.")
 if ARTICLE_AGENT_MAX_BUDGET_REPAIRS < 0:
     raise ImproperlyConfigured("ARTICLE_AGENT_MAX_BUDGET_REPAIRS cannot be negative.")
 ARTICLE_AGENT_RESEARCH_MODE = os.getenv(
@@ -197,6 +219,53 @@ ARTICLE_AGENT_GROQ_REQUESTS_PER_MINUTE = int(
 ARTICLE_AGENT_GROQ_TOKENS_PER_MINUTE = int(
     os.getenv("ARTICLE_AGENT_GROQ_TOKENS_PER_MINUTE", "30000")
 )
+ARTICLE_AGENT_GROQ_INPUT_TOKENS_PER_MINUTE = _optional_positive_int_env(
+    "ARTICLE_AGENT_GROQ_INPUT_TOKENS_PER_MINUTE"
+)
+ARTICLE_AGENT_GROQ_OUTPUT_TOKENS_PER_MINUTE = _optional_positive_int_env(
+    "ARTICLE_AGENT_GROQ_OUTPUT_TOKENS_PER_MINUTE"
+)
+ARTICLE_AGENT_GROQ_QUOTA_NAMESPACE = os.getenv(
+    "ARTICLE_AGENT_GROQ_QUOTA_NAMESPACE", "default"
+).strip()
+ARTICLE_AGENT_GROQ_SAFETY_MARGIN = float(
+    os.getenv("ARTICLE_AGENT_GROQ_SAFETY_MARGIN", "0.90")
+)
+ARTICLE_AGENT_GROQ_LEASE_SECONDS = int(
+    os.getenv("ARTICLE_AGENT_GROQ_LEASE_SECONDS", "150")
+)
+ARTICLE_AGENT_PRIMARY_MODEL = os.getenv(
+    "ARTICLE_AGENT_PRIMARY_MODEL", os.getenv("LLM_MODEL", "")
+).strip()
+ARTICLE_AGENT_FALLBACK_MODELS = tuple(
+    model.strip() for model in os.getenv("ARTICLE_AGENT_FALLBACK_MODELS", "").split(",")
+    if model.strip()
+)
+ARTICLE_AGENT_REVIEW_MODEL = os.getenv("ARTICLE_AGENT_REVIEW_MODEL", "").strip()
+ARTICLE_AGENT_FALLBACK_ON_PROVIDER_429 = os.getenv(
+    "ARTICLE_AGENT_FALLBACK_ON_PROVIDER_429", "false"
+).lower() == "true"
+ARTICLE_AGENT_FALLBACK_ON_TRANSIENT_FAILURES = os.getenv(
+    "ARTICLE_AGENT_FALLBACK_ON_TRANSIENT_FAILURES", "false"
+).lower() == "true"
+try:
+    ARTICLE_AGENT_GROQ_MODEL_LIMITS = json.loads(
+        os.getenv("ARTICLE_AGENT_GROQ_MODEL_LIMITS", "{}")
+    )
+except json.JSONDecodeError as error:
+    raise ImproperlyConfigured("ARTICLE_AGENT_GROQ_MODEL_LIMITS must be valid JSON.") from error
+if not isinstance(ARTICLE_AGENT_GROQ_MODEL_LIMITS, dict):
+    raise ImproperlyConfigured("ARTICLE_AGENT_GROQ_MODEL_LIMITS must be a JSON object.")
+if not ARTICLE_AGENT_PRIMARY_MODEL:
+    raise ImproperlyConfigured("ARTICLE_AGENT_PRIMARY_MODEL or LLM_MODEL must be configured.")
+if not ARTICLE_AGENT_GROQ_QUOTA_NAMESPACE:
+    raise ImproperlyConfigured("ARTICLE_AGENT_GROQ_QUOTA_NAMESPACE must not be empty.")
+if not 0 < ARTICLE_AGENT_GROQ_SAFETY_MARGIN <= 1:
+    raise ImproperlyConfigured("ARTICLE_AGENT_GROQ_SAFETY_MARGIN must be in (0, 1].")
+if ARTICLE_AGENT_GROQ_LEASE_SECONDS < ARTICLE_AGENT_LLM_TIMEOUT_SECONDS:
+    raise ImproperlyConfigured(
+        "ARTICLE_AGENT_GROQ_LEASE_SECONDS must cover ARTICLE_AGENT_LLM_TIMEOUT_SECONDS."
+    )
 
 
 # Email

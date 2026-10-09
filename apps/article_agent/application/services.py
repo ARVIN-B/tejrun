@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import json
 import os
+from math import ceil
 from dataclasses import asdict
 from typing import Protocol
+
+from django.conf import settings
 
 from apps.article_agent.application.context_builder import ContextBuilder
 from apps.article_agent.application.word_budget import WordCounter
@@ -22,7 +25,16 @@ from apps.article_agent.domain.serialization import review_result_from_dict
 
 
 class TextGenerator(Protocol):
-    async def generate(self, prompt: str) -> str: ...
+    async def generate(
+        self, prompt: str, *, operation: str = "writing", output_tokens: int | None = None,
+    ) -> str: ...
+
+
+def _prose_output_tokens(maximum_words: int) -> int:
+    """Bound a unit request without reserving the global maximum every time."""
+    estimate = ceil(maximum_words * settings.ARTICLE_AGENT_OUTPUT_TOKENS_PER_WORD)
+    estimate += settings.ARTICLE_AGENT_OUTPUT_TOKEN_BUFFER
+    return min(settings.ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS, max(256, estimate))
 
 
 class Researcher(Protocol):
@@ -108,7 +120,9 @@ class SectionWriter:
             f"maximum {section.maximum_words} semantic words. Use keywords naturally.\n\n"
             f"{context}"
         )
-        return (await self.llm.generate(prompt)).strip()
+        return (await self.llm.generate(
+            prompt, operation="section_write", output_tokens=_prose_output_tokens(section.maximum_words),
+        )).strip()
 
     async def repair(
         self, plan: ArticlePlan, section: SectionPlan, content: str, allocation, style: StyleProfile,
@@ -124,7 +138,8 @@ class SectionWriter:
         )
         return (await self.llm.generate(
             "Repair the entire section's length. Preserve facts and heading intent; do not return a short "
-            "summary or commentary. Return only complete section prose within the stated word range.\n\n" + context
+            "summary or commentary. Return only complete section prose within the stated word range.\n\n" + context,
+            operation="section_repair", output_tokens=_prose_output_tokens(allocation.maximum_words),
         )).strip()
 
 
@@ -143,7 +158,9 @@ class SectionReviewer:
             '{"passed":bool,"score":0-10,"issues":[{"type":str,"severity":"low|medium|high|critical","description":str}],'
             '"strengths":[str],"required_fixes":[str]}.\n\n' + context
         )
-        return review_result_from_dict(_json_object(await self.llm.generate(prompt)))
+        return review_result_from_dict(_json_object(await self.llm.generate(
+            prompt, operation="section_review", output_tokens=settings.ARTICLE_AGENT_LLM_REVIEW_MAX_OUTPUT_TOKENS,
+        )))
 
 
 class RevisionService:
@@ -162,7 +179,9 @@ class RevisionService:
             "the requested heading intent, language and approximate word budget. Return only revised prose.\n\n"
             + context
         )
-        content = (await self.llm.generate(prompt)).strip()
+        content = (await self.llm.generate(
+            prompt, operation="section_revision", output_tokens=_prose_output_tokens(section.maximum_words),
+        )).strip()
         return SectionDraft(
             section_index=draft.section_index, heading=draft.heading, content=content,
             revision_number=draft.revision_number + 1,
@@ -200,7 +219,9 @@ class ArticleReviewer:
             "Return STRICT JSON only: {\"passed\":bool,\"score\":0-10,\"findings\":[{\"type\":str,\"severity\":\"low|medium|high|critical\",\"description\":str,\"affected_units\":[\"section:0\"],\"recommendation\":str}],\"required_fixes\":[str]}. Each finding must identify affected units.\n\n"
             + context
         )
-        data = _json_object(await self.llm.generate(prompt))
+        data = _json_object(await self.llm.generate(
+            prompt, operation="article_review", output_tokens=settings.ARTICLE_AGENT_LLM_REVIEW_MAX_OUTPUT_TOKENS,
+        ))
         findings = [ReviewIssue(**item) for item in data.get("findings", [])]
         return ArticleReview(
             passed=bool(data["passed"]), score=float(data["score"]), findings=findings,
@@ -235,7 +256,11 @@ class FinalEditor:
                 plan, plan.sections[section.section_index], section.content, findings, style
             )
             prompt = "Edit this section only when a listed issue applies. Preserve facts and heading intent. Return only prose.\n\n" + context
-            content = (await self.llm.generate(prompt)).strip()
+            content = (await self.llm.generate(
+                prompt, operation="section_edit", output_tokens=_prose_output_tokens(
+                    plan.sections[section.section_index].maximum_words
+                ),
+            )).strip()
             edited.append(SectionDraft(section.section_index, section.heading, content, revision_number=section.revision_number))
         return edited
 
@@ -257,7 +282,11 @@ class SupplementWriter:
             "common_mistakes": "Write a concise practical common-mistakes section based only on covered material.",
             "applications": "Write a concise practical applications section based only on covered material.",
         }
-        return (await self.llm.generate(prompts[kind] + "\n\n" + context)).strip()
+        allocation = plan.budget.allocation_for(kind)
+        return (await self.llm.generate(
+            prompts[kind] + "\n\n" + context,
+            operation="format", output_tokens=_prose_output_tokens(allocation.maximum_words),
+        )).strip()
 
     async def repair(self, plan: ArticlePlan, memory: ArticleMemory, kind: str, content: str, allocation) -> str:
         context = self.context_builder._bounded_json(
@@ -266,5 +295,6 @@ class SupplementWriter:
              "memory": asdict(memory.normalized())}, self.context_builder.budgets.editor_context_limit,
         )
         return (await self.llm.generate(
-            "Repair this article unit to the requested semantic word range. Preserve its required structure and facts. Return only the unit.\n\n" + context
+            "Repair this article unit to the requested semantic word range. Preserve its required structure and facts. Return only the unit.\n\n" + context,
+            operation="format", output_tokens=_prose_output_tokens(allocation.maximum_words),
         )).strip()
