@@ -14,7 +14,10 @@ from typing import Any
 from django.conf import settings
 
 from apps.article_agent.infrastructure.rate_limit import (
-    QuotaLimit, RateLimitExceeded, RateLimitPolicy, RedisGroqLimiter,
+    QuotaLimit,
+    RateLimitExceeded,
+    RateLimitPolicy,
+    RedisGroqLimiter,
 )
 
 from autogen_core import CancellationToken
@@ -30,7 +33,9 @@ class ProviderRateLimitError(RuntimeError):
 
     def __init__(self, *, model: str, retry_after: int | None, detail: str) -> None:
         self.model, self.retry_after = model, retry_after
-        super().__init__(f"provider_rate_limit:model={model}; retry-after: {retry_after or 0}; {detail}")
+        super().__init__(
+            f"provider_rate_limit:model={model}; retry-after: {retry_after or 0}; {detail}"
+        )
 
 
 class ProviderTransientError(RuntimeError):
@@ -45,7 +50,9 @@ class ProviderEmptyResponseError(ProviderTransientError):
     """The provider completed a request but returned no usable text."""
 
     def __init__(self, *, model: str, finish_reason: str) -> None:
-        super().__init__(model=model, detail=f"empty_response:finish_reason={finish_reason}")
+        super().__init__(
+            model=model, detail=f"empty_response:finish_reason={finish_reason}"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +62,12 @@ class ModelRoute:
     review_model: str | None = None
 
     def candidates(self, operation: str) -> tuple[str, ...]:
-        initial = self.review_model if operation in {"section_review", "article_review", "format"} and self.review_model else self.primary
+        initial = (
+            self.review_model
+            if operation in {"section_review", "article_review", "format"}
+            and self.review_model
+            else self.primary
+        )
         return tuple(dict.fromkeys((initial, self.primary, *self.fallbacks)))
 
 
@@ -74,13 +86,17 @@ def _quota_from_config(raw: Mapping[str, Any], *, model: str) -> QuotaLimit:
     allowed = {"concurrency", "rpm", "tpm", "input_tpm", "output_tpm"}
     unknown = set(raw) - allowed
     if unknown:
-        raise ValueError(f"Unsupported model quota fields for {model}: {', '.join(sorted(unknown))}")
+        raise ValueError(
+            f"Unsupported model quota fields for {model}: {', '.join(sorted(unknown))}"
+        )
     return QuotaLimit(
         concurrency=_positive_optional(raw.get("concurrency"), "concurrency"),
         requests_per_window=_positive_optional(raw.get("rpm"), "rpm"),
         tokens_per_window=_positive_optional(raw.get("tpm"), "tpm"),
         input_tokens_per_window=_positive_optional(raw.get("input_tpm"), "input_tpm"),
-        output_tokens_per_window=_positive_optional(raw.get("output_tpm"), "output_tpm"),
+        output_tokens_per_window=_positive_optional(
+            raw.get("output_tpm"), "output_tpm"
+        ),
     )
 
 
@@ -118,21 +134,35 @@ class GroqClient:
         primary = settings.ARTICLE_AGENT_PRIMARY_MODEL
         configured = (primary, *settings.ARTICLE_AGENT_FALLBACK_MODELS)
         if any(not _MODEL_NAME.fullmatch(model) for model in configured):
-            raise ValueError("Article Agent model names contain unsupported characters.")
-        fallbacks = tuple(model for model in settings.ARTICLE_AGENT_FALLBACK_MODELS if model != primary)
+            raise ValueError(
+                "Article Agent model names contain unsupported characters."
+            )
+        fallbacks = tuple(
+            model
+            for model in settings.ARTICLE_AGENT_FALLBACK_MODELS
+            if model != primary
+        )
         if len(set(fallbacks)) != len(fallbacks):
-            raise ValueError("ARTICLE_AGENT_FALLBACK_MODELS must not contain duplicates.")
+            raise ValueError(
+                "ARTICLE_AGENT_FALLBACK_MODELS must not contain duplicates."
+            )
         review_model = settings.ARTICLE_AGENT_REVIEW_MODEL or None
         if review_model and review_model not in {primary, *fallbacks}:
-            raise ValueError("ARTICLE_AGENT_REVIEW_MODEL must be the primary or a configured fallback model.")
-        return ModelRoute(primary=primary, fallbacks=fallbacks, review_model=review_model)
+            raise ValueError(
+                "ARTICLE_AGENT_REVIEW_MODEL must be the primary or a configured fallback model."
+            )
+        return ModelRoute(
+            primary=primary, fallbacks=fallbacks, review_model=review_model
+        )
 
     @staticmethod
     def _model_limits_from_settings() -> dict[str, QuotaLimit]:
         result: dict[str, QuotaLimit] = {}
         for model, raw in settings.ARTICLE_AGENT_GROQ_MODEL_LIMITS.items():
             if not isinstance(model, str) or not _MODEL_NAME.fullmatch(model):
-                raise ValueError("ARTICLE_AGENT_GROQ_MODEL_LIMITS contains an invalid model name.")
+                raise ValueError(
+                    "ARTICLE_AGENT_GROQ_MODEL_LIMITS contains an invalid model name."
+                )
             if not isinstance(raw, Mapping):
                 raise ValueError(f"Quota configuration for {model} must be an object.")
             result[model] = _quota_from_config(raw, model=model)
@@ -145,8 +175,11 @@ class GroqClient:
                 api_key=os.getenv("LLM_API_KEY"),
                 base_url=os.getenv("LLM_BASE_URL"),
                 model_info={
-                    "vision": False, "function_calling": False, "json_output": False,
-                    "family": "unknown", "structured_output": False,
+                    "vision": False,
+                    "function_calling": False,
+                    "json_output": False,
+                    "family": "unknown",
+                    "structured_output": False,
                 },
                 max_tokens=settings.ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS,
             )
@@ -173,13 +206,17 @@ class GroqClient:
     @staticmethod
     def _headers(error: Exception) -> Mapping[str, str]:
         response = getattr(error, "response", None)
-        headers = getattr(response, "headers", None) or getattr(error, "headers", None) or {}
+        headers = (
+            getattr(response, "headers", None) or getattr(error, "headers", None) or {}
+        )
         return headers if isinstance(headers, Mapping) else {}
 
     @classmethod
     def _status(cls, error: Exception) -> int | None:
         response = getattr(error, "response", None)
-        status = getattr(error, "status_code", None) or getattr(response, "status_code", None)
+        status = getattr(error, "status_code", None) or getattr(
+            response, "status_code", None
+        )
         return status if isinstance(status, int) else None
 
     @classmethod
@@ -205,33 +242,93 @@ class GroqClient:
         status = self._status(error)
         if status == 429:
             return settings.ARTICLE_AGENT_FALLBACK_ON_PROVIDER_429
-        return self._is_transient(error) and settings.ARTICLE_AGENT_FALLBACK_ON_TRANSIENT_FAILURES
+        return (
+            self._is_transient(error)
+            and settings.ARTICLE_AGENT_FALLBACK_ON_TRANSIENT_FAILURES
+        )
+
+    async def _reserve_with_retry(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        *,
+        model: str,
+    ):
+        max_retries = 3
+
+        for attempt in range(max_retries + 1):
+            try:
+                return await self.limiter.reserve(
+                    input_tokens,
+                    output_tokens,
+                    model=model,
+                )
+            except RateLimitExceeded as error:
+                # محدودیت حساب با عوض کردن مدل حل نمی‌شود.
+                if not error.cause.startswith("account_"):
+                    raise
+
+                if attempt >= max_retries:
+                    raise
+
+                delay = error.retry_after + 1
+
+                logger.warning(
+                    "Local rate limit reached: cause=%s; "
+                    "retry_in=%s seconds; attempt=%s/%s",
+                    error.cause,
+                    delay,
+                    attempt + 1,
+                    max_retries,
+                )
+
+                await asyncio.sleep(delay)
+
+        raise RuntimeError("Rate-limit retry loop ended unexpectedly.")
 
     async def generate(
-        self, prompt: str, *, operation: str = "writing", output_tokens: int | None = None,
+        self,
+        prompt: str,
+        *,
+        operation: str = "writing",
+        output_tokens: int | None = None,
     ) -> str:
         if not prompt.strip():
             raise ValueError("Refusing to send an empty provider prompt.")
         output_tokens = output_tokens or settings.ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS
-        output_tokens = min(settings.ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS, max(1, output_tokens))
+        output_tokens = min(
+            settings.ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS, max(1, output_tokens)
+        )
         input_tokens = self.estimate_input_tokens(prompt)
         candidates = self.route.candidates(operation)
         last_error: Exception | None = None
         for index, model in enumerate(candidates):
-            for empty_attempt in range(settings.ARTICLE_AGENT_EMPTY_RESPONSE_RETRIES + 1):
+            for empty_attempt in range(
+                settings.ARTICLE_AGENT_EMPTY_RESPONSE_RETRIES + 1
+            ):
                 reservation = None
                 try:
-                    reservation = await self.limiter.reserve(input_tokens, output_tokens, model=model)
+                    # reservation = await self.limiter.reserve(
+                    #     input_tokens, output_tokens, model=model
+                    # )
+                    reservation = await self._reserve_with_retry(
+                        input_tokens,
+                        output_tokens,
+                        model=model,
+                    )
+                    
+                    
                     result = await asyncio.wait_for(
                         self._client_for(model).create(
                             messages=[UserMessage(content=prompt, source="user")],
                             # extra_create_args={"max_tokens": output_tokens},
-                            extra_create_args = {
+                            extra_create_args={
                                 "max_tokens": output_tokens,
-                                "reasoning_effort": "low",   # ← این خط را اضافه کن
+                                "reasoning_effort": "low",  # ← این خط را اضافه کن
                             },
                             cancellation_token=CancellationToken(),
-                        ), timeout=settings.ARTICLE_AGENT_LLM_TIMEOUT_SECONDS,
+                        ),
+                        timeout=settings.ARTICLE_AGENT_LLM_TIMEOUT_SECONDS,
                     )
                     usage = self._usage(result)
                     if usage is None:
@@ -240,21 +337,35 @@ class GroqClient:
                         await self.limiter.release(reservation)
                     else:
                         await self.limiter.settle(
-                            reservation, actual_input_tokens=usage[0], actual_output_tokens=usage[1]
+                            reservation,
+                            actual_input_tokens=usage[0],
+                            actual_output_tokens=usage[1],
                         )
                     content = result.content
                     if not isinstance(content, str) or not content.strip():
                         raise ProviderEmptyResponseError(
                             model=model,
-                            finish_reason=str(getattr(result, "finish_reason", "unknown")),
+                            finish_reason=str(
+                                getattr(result, "finish_reason", "unknown")
+                            ),
                         )
                     if index:
                         logger.warning(
                             "Article Agent selected fallback model=%s operation=%s reason=%s",
-                            model, operation, type(last_error).__name__ if last_error else "configured_route",
+                            model,
+                            operation,
+                            (
+                                type(last_error).__name__
+                                if last_error
+                                else "configured_route"
+                            ),
                         )
                     else:
-                        logger.info("Article Agent selected model=%s operation=%s", model, operation)
+                        logger.info(
+                            "Article Agent selected model=%s operation=%s",
+                            model,
+                            operation,
+                        )
                     return content
                 except asyncio.CancelledError:
                     if reservation is not None:
@@ -266,32 +377,42 @@ class GroqClient:
                     last_error = error
                     if (
                         isinstance(error, ProviderEmptyResponseError)
-                        and empty_attempt < settings.ARTICLE_AGENT_EMPTY_RESPONSE_RETRIES
+                        and empty_attempt
+                        < settings.ARTICLE_AGENT_EMPTY_RESPONSE_RETRIES
                     ):
                         logger.warning(
                             "Article Agent received an empty provider response; retrying model=%s operation=%s",
-                            model, operation,
+                            model,
+                            operation,
                         )
                         continue
                     if index + 1 < len(candidates) and self._can_fallback(error):
                         logger.warning(
                             "Article Agent fallback candidate after model=%s operation=%s reason=%s",
-                            model, operation, type(error).__name__,
+                            model,
+                            operation,
+                            type(error).__name__,
                         )
                         break
                     if self._status(error) == 429:
                         raise ProviderRateLimitError(
-                            model=model, retry_after=self._retry_after(error), detail=type(error).__name__
+                            model=model,
+                            retry_after=self._retry_after(error),
+                            detail=type(error).__name__,
                         ) from error
                     if self._is_transient(error):
                         if isinstance(error, ProviderTransientError):
                             raise
-                        raise ProviderTransientError(model=model, detail=type(error).__name__) from error
+                        raise ProviderTransientError(
+                            model=model, detail=type(error).__name__
+                        ) from error
                     raise
         raise AssertionError("Model route produced no candidates.")
 
     async def close(self) -> None:
         try:
-            await asyncio.gather(*(client.close() for client in self._model_clients.values()))
+            await asyncio.gather(
+                *(client.close() for client in self._model_clients.values())
+            )
         finally:
             await self.limiter.close()
