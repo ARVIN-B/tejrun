@@ -11,7 +11,7 @@ from apps.article_agent.application.job_execution import ArticleJobExecutionServ
 from apps.article_agent.domain import QualityReport
 from apps.article_agent.models import Article, ArticleJob, JobStatus
 from apps.article_agent.tasks import _is_rate_limited, _is_transient_provider_error, _retry_delay, generate_article_task
-from apps.article_agent.infrastructure.ai.groq_client import ProviderRateLimitError
+from apps.article_agent.infrastructure.ai.groq_client import ProviderEmptyResponseError, ProviderRateLimitError
 from apps.article_agent.infrastructure.rate_limit import RateLimitExceeded
 
 
@@ -122,6 +122,10 @@ class ExecutionPathTests(TransactionTestCase):
         self.assertTrue(_is_transient_provider_error(local))
         self.assertTrue(_is_transient_provider_error(provider))
         self.assertNotEqual(type(local), type(provider))
+
+    def test_empty_provider_response_is_retryable_not_a_budget_acceptance(self) -> None:
+        error = ProviderEmptyResponseError(model="primary", finish_reason="stop")
+        self.assertTrue(_is_transient_provider_error(error))
 
     @override_settings(ARTICLE_AGENT_RETRY_BACKOFF_SECONDS=10)
     @patch("apps.article_agent.tasks.random.randint", return_value=3)

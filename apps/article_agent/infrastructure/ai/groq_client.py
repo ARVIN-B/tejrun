@@ -41,6 +41,13 @@ class ProviderTransientError(RuntimeError):
         super().__init__(f"provider_transient:model={model}; {detail}")
 
 
+class ProviderEmptyResponseError(ProviderTransientError):
+    """The provider completed a request but returned no usable text."""
+
+    def __init__(self, *, model: str, finish_reason: str) -> None:
+        super().__init__(model=model, detail=f"empty_response:finish_reason={finish_reason}")
+
+
 @dataclass(frozen=True, slots=True)
 class ModelRoute:
     primary: str
@@ -185,6 +192,8 @@ class GroqClient:
 
     @classmethod
     def _is_transient(cls, error: Exception) -> bool:
+        if isinstance(error, ProviderTransientError):
+            return True
         status = cls._status(error)
         if status in {429, 498} or (status is not None and 500 <= status < 600):
             return True
@@ -209,54 +218,72 @@ class GroqClient:
         candidates = self.route.candidates(operation)
         last_error: Exception | None = None
         for index, model in enumerate(candidates):
-            reservation = None
-            try:
-                reservation = await self.limiter.reserve(input_tokens, output_tokens, model=model)
-                result = await asyncio.wait_for(
-                    self._client_for(model).create(
-                        messages=[UserMessage(content=prompt, source="user")],
-                        extra_create_args={"max_tokens": output_tokens},
-                        cancellation_token=CancellationToken(),
-                    ), timeout=settings.ARTICLE_AGENT_LLM_TIMEOUT_SECONDS,
-                )
-                usage = self._usage(result)
-                if usage is None:
-                    # The configured bound remains reserved when usage metadata
-                    # is unavailable; do not optimistically free quota.
-                    await self.limiter.release(reservation)
-                else:
-                    await self.limiter.settle(
-                        reservation, actual_input_tokens=usage[0], actual_output_tokens=usage[1]
+            for empty_attempt in range(settings.ARTICLE_AGENT_EMPTY_RESPONSE_RETRIES + 1):
+                reservation = None
+                try:
+                    reservation = await self.limiter.reserve(input_tokens, output_tokens, model=model)
+                    result = await asyncio.wait_for(
+                        self._client_for(model).create(
+                            messages=[UserMessage(content=prompt, source="user")],
+                            extra_create_args={"max_tokens": output_tokens},
+                            cancellation_token=CancellationToken(),
+                        ), timeout=settings.ARTICLE_AGENT_LLM_TIMEOUT_SECONDS,
                     )
-                if index:
-                    logger.warning(
-                        "Article Agent selected fallback model=%s operation=%s reason=%s",
-                        model, operation, type(last_error).__name__ if last_error else "configured_route",
-                    )
-                else:
-                    logger.info("Article Agent selected model=%s operation=%s", model, operation)
-                return str(result.content)
-            except asyncio.CancelledError:
-                if reservation is not None:
-                    await self.limiter.release(reservation)
-                raise
-            except Exception as error:
-                if reservation is not None and not reservation.released:
-                    await self.limiter.release(reservation)
-                last_error = error
-                if index + 1 < len(candidates) and self._can_fallback(error):
-                    logger.warning(
-                        "Article Agent fallback candidate after model=%s operation=%s reason=%s",
-                        model, operation, type(error).__name__,
-                    )
-                    continue
-                if self._status(error) == 429:
-                    raise ProviderRateLimitError(
-                        model=model, retry_after=self._retry_after(error), detail=type(error).__name__
-                    ) from error
-                if self._is_transient(error):
-                    raise ProviderTransientError(model=model, detail=type(error).__name__) from error
-                raise
+                    usage = self._usage(result)
+                    if usage is None:
+                        # The configured bound remains reserved when usage metadata
+                        # is unavailable; do not optimistically free quota.
+                        await self.limiter.release(reservation)
+                    else:
+                        await self.limiter.settle(
+                            reservation, actual_input_tokens=usage[0], actual_output_tokens=usage[1]
+                        )
+                    content = result.content
+                    if not isinstance(content, str) or not content.strip():
+                        raise ProviderEmptyResponseError(
+                            model=model,
+                            finish_reason=str(getattr(result, "finish_reason", "unknown")),
+                        )
+                    if index:
+                        logger.warning(
+                            "Article Agent selected fallback model=%s operation=%s reason=%s",
+                            model, operation, type(last_error).__name__ if last_error else "configured_route",
+                        )
+                    else:
+                        logger.info("Article Agent selected model=%s operation=%s", model, operation)
+                    return content
+                except asyncio.CancelledError:
+                    if reservation is not None:
+                        await self.limiter.release(reservation)
+                    raise
+                except Exception as error:
+                    if reservation is not None and not reservation.released:
+                        await self.limiter.release(reservation)
+                    last_error = error
+                    if (
+                        isinstance(error, ProviderEmptyResponseError)
+                        and empty_attempt < settings.ARTICLE_AGENT_EMPTY_RESPONSE_RETRIES
+                    ):
+                        logger.warning(
+                            "Article Agent received an empty provider response; retrying model=%s operation=%s",
+                            model, operation,
+                        )
+                        continue
+                    if index + 1 < len(candidates) and self._can_fallback(error):
+                        logger.warning(
+                            "Article Agent fallback candidate after model=%s operation=%s reason=%s",
+                            model, operation, type(error).__name__,
+                        )
+                        break
+                    if self._status(error) == 429:
+                        raise ProviderRateLimitError(
+                            model=model, retry_after=self._retry_after(error), detail=type(error).__name__
+                        ) from error
+                    if self._is_transient(error):
+                        if isinstance(error, ProviderTransientError):
+                            raise
+                        raise ProviderTransientError(model=model, detail=type(error).__name__) from error
+                    raise
         raise AssertionError("Model route produced no candidates.")
 
     async def close(self) -> None:

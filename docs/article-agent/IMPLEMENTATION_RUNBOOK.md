@@ -77,6 +77,13 @@ only after confirming project permissions and quotas. Values for every quota
 must come from the exact Groq project/organization Limits view, not examples
 or published plan tables.
 
+An empty or non-text provider completion is never passed to `BudgetManager`.
+The client retries that individual provider call a bounded number of times
+(`ARTICLE_AGENT_EMPTY_RESPONSE_RETRIES`, default `1`); if it remains empty it
+raises `ProviderEmptyResponseError`, which is a retryable provider failure.
+The job resumes from accepted checkpoints on Celery retry instead of treating
+zero words as a normal budget-repair result.
+
 ## Current execution status (2026-10-09)
 
 - M1/M2 are verified by planner/runtime-budget tests, including deliberate starvation, short/long repair and impossible-output rejection.

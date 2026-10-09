@@ -4,7 +4,9 @@ from unittest.mock import AsyncMock, patch
 
 from django.test import SimpleTestCase, override_settings
 
-from apps.article_agent.infrastructure.ai.groq_client import GroqClient, ProviderRateLimitError
+from apps.article_agent.infrastructure.ai.groq_client import (
+    GroqClient, ProviderEmptyResponseError, ProviderRateLimitError,
+)
 from apps.article_agent.infrastructure.rate_limit import RateLimitExceeded, Reservation
 
 
@@ -50,6 +52,16 @@ class FakeModelClient:
 
     async def close(self):
         self.closed = True
+
+
+class SequencedModelClient(FakeModelClient):
+    def __init__(self, results):
+        super().__init__()
+        self.results = list(results)
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.results.pop(0)
 
 
 def response(text="ok", prompt_tokens=10, completion_tokens=5):
@@ -126,6 +138,26 @@ class GroqClientGenerationTests(SimpleTestCase):
             asyncio.run(client.generate("prompt"))
         self.assertEqual(raised.exception.retry_after, 7)
         self.assertEqual(len(limiter.released), 1)
+
+    @override_settings(ARTICLE_AGENT_EMPTY_RESPONSE_RETRIES=1)
+    def test_empty_response_is_retried_locally_before_budget_manager_sees_it(self) -> None:
+        limiter = FakeLimiter()
+        model = SequencedModelClient([response("  "), response("recovered prose")])
+        client = self.make_client(limiter=limiter, clients={"openai/gpt-oss-120b": model})
+
+        self.assertEqual(asyncio.run(client.generate("prompt")), "recovered prose")
+        self.assertEqual(len(model.calls), 2)
+        self.assertEqual(len(limiter.settled), 2)
+
+    @override_settings(ARTICLE_AGENT_EMPTY_RESPONSE_RETRIES=1)
+    def test_repeated_empty_response_is_a_transient_provider_error(self) -> None:
+        limiter = FakeLimiter()
+        model = SequencedModelClient([response(""), response("\t")])
+        client = self.make_client(limiter=limiter, clients={"openai/gpt-oss-120b": model})
+
+        with self.assertRaises(ProviderEmptyResponseError):
+            asyncio.run(client.generate("prompt"))
+        self.assertEqual(len(model.calls), 2)
 
     def test_timeout_is_normalized_and_releases_the_active_slot(self) -> None:
         limiter = FakeLimiter()

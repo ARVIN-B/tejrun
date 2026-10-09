@@ -22,6 +22,15 @@ with provider usage. Unit tests cover quota dimensions, shared coordination,
 fallback bounds, 429 distinction and cleanup; real Redis/Groq verification is
 still required per deployment.
 
+### Empty provider completions were misclassified as budget failures
+`GroqClient` previously converted any completion payload to a string, allowing
+empty/whitespace output to reach the writer and eventually become
+`unit_budget_unsatisfied:...:0`. Empty non-text responses now receive one
+bounded provider-call retry and then become `ProviderEmptyResponseError`, a
+retryable provider failure. The zero-word BudgetManager rejection remains in
+place for non-provider/fake-generator callers and regression tests cover both
+behaviours.
+
 ## P0 confirmed
 
 ### 1. Full article budget is not planned
