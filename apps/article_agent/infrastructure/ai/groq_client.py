@@ -225,7 +225,11 @@ class GroqClient:
                     result = await asyncio.wait_for(
                         self._client_for(model).create(
                             messages=[UserMessage(content=prompt, source="user")],
-                            extra_create_args={"max_tokens": output_tokens},
+                            # extra_create_args={"max_tokens": output_tokens},
+                            extra_create_args = {
+                                "max_tokens": output_tokens,
+                                "reasoning_effort": "low",   # ← این خط را اضافه کن
+                            },
                             cancellation_token=CancellationToken(),
                         ), timeout=settings.ARTICLE_AGENT_LLM_TIMEOUT_SECONDS,
                     )

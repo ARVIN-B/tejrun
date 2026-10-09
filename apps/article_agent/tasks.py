@@ -8,7 +8,8 @@ from django.utils import timezone
 
 from apps.article_agent.application.job_execution import ArticleJobExecutionService
 from apps.article_agent.infrastructure.ai.groq_client import (
-    ProviderRateLimitError, ProviderTransientError,
+    ProviderRateLimitError,
+    ProviderTransientError,
 )
 from apps.article_agent.infrastructure.rate_limit import RateLimitExceeded
 from apps.article_agent.models import ArticleJob, JobStatus
@@ -20,20 +21,36 @@ def _is_rate_limited(error: Exception) -> bool:
     if isinstance(error, (RateLimitExceeded, ProviderRateLimitError)):
         return True
     text = str(error).lower()
-    return "ratelimit" in error.__class__.__name__.lower() or "429" in text or "rate limit" in text
+    return (
+        "ratelimit" in error.__class__.__name__.lower()
+        or "429" in text
+        or "rate limit" in text
+    )
 
 
 def _is_transient_provider_error(error: Exception) -> bool:
-    if isinstance(error, (RateLimitExceeded, ProviderRateLimitError, ProviderTransientError)):
+    if isinstance(
+        error, (RateLimitExceeded, ProviderRateLimitError, ProviderTransientError)
+    ):
         return True
     text = str(error).lower()
-    return _is_rate_limited(error) or isinstance(error, TimeoutError) or any(
-        phrase in text for phrase in ("timeout", "temporarily unavailable", "connection reset", "connection error")
+    return (
+        _is_rate_limited(error)
+        or isinstance(error, TimeoutError)
+        or any(
+            phrase in text
+            for phrase in (
+                "timeout",
+                "temporarily unavailable",
+                "connection reset",
+                "connection error",
+            )
+        )
     )
 
 
 def _retry_delay(error: Exception, retry_number: int) -> int:
-    delay = settings.ARTICLE_AGENT_RETRY_BACKOFF_SECONDS * (2 ** retry_number)
+    delay = settings.ARTICLE_AGENT_RETRY_BACKOFF_SECONDS
     if isinstance(error, RateLimitExceeded):
         # Local limiter times are derived from the blocking quota's lease or
         # fixed-window TTL, not the unrelated request-counter TTL.
@@ -57,11 +74,18 @@ def generate_article_task(self, job_id: int) -> None:
     try:
         ArticleJobExecutionService().execute(job_id, task_id=task_id)
     except Exception as error:
-        if _is_transient_provider_error(error) and self.request.retries < settings.ARTICLE_AGENT_MAX_RETRIES:
+        if (
+            _is_transient_provider_error(error)
+            and self.request.retries < settings.ARTICLE_AGENT_MAX_RETRIES
+        ):
             reason = (
-                "internal quota" if isinstance(error, RateLimitExceeded)
-                else "provider rate limit" if isinstance(error, ProviderRateLimitError)
-                else "transient provider failure"
+                "internal quota"
+                if isinstance(error, RateLimitExceeded)
+                else (
+                    "provider rate limit"
+                    if isinstance(error, ProviderRateLimitError)
+                    else "transient provider failure"
+                )
             )
             ArticleJob.objects.filter(pk=job_id, celery_task_id=task_id).update(
                 status=JobStatus.QUEUED,
@@ -72,14 +96,24 @@ def generate_article_task(self, job_id: int) -> None:
             countdown = _retry_delay(error, self.request.retries)
             logger.warning(
                 "Article job %s has %s; retrying in %s seconds",
-                job_id, reason, countdown,
+                job_id,
+                reason,
+                countdown,
             )
-            raise self.retry(exc=error, countdown=countdown, max_retries=settings.ARTICLE_AGENT_MAX_RETRIES)
+            raise self.retry(
+                exc=error,
+                countdown=countdown,
+                max_retries=settings.ARTICLE_AGENT_MAX_RETRIES,
+            )
         logger.exception("Article job %s failed", job_id)
         ArticleJob.objects.filter(pk=job_id, celery_task_id=task_id).update(
             status=JobStatus.FAILED,
             current_stage="Failed",
-            error_code="provider_error" if _is_transient_provider_error(error) else "generation_error",
+            error_code=(
+                "provider_error"
+                if _is_transient_provider_error(error)
+                else "generation_error"
+            ),
             error_message="Article generation encountered a temporary problem. Please retry.",
             updated_at=timezone.now(),
         )

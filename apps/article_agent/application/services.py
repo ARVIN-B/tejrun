@@ -18,15 +18,26 @@ from apps.article_agent.application.context_builder import ContextBuilder
 from apps.article_agent.application.word_budget import WordCounter
 from apps.article_agent.application.style import HumanStyleAnalyzer
 from apps.article_agent.domain import (
-    ArticleMemory, ArticlePlan, ArticleReview, ResearchData, ReviewIssue,
-    ReviewResult, SectionDraft, SectionPlan, StyleProfile,
+    ArticleMemory,
+    ArticlePlan,
+    ArticleReview,
+    ResearchData,
+    ReviewIssue,
+    ReviewResult,
+    SectionDraft,
+    SectionPlan,
+    StyleProfile,
 )
 from apps.article_agent.domain.serialization import review_result_from_dict
 
 
 class TextGenerator(Protocol):
     async def generate(
-        self, prompt: str, *, operation: str = "writing", output_tokens: int | None = None,
+        self,
+        prompt: str,
+        *,
+        operation: str = "writing",
+        output_tokens: int | None = None,
     ) -> str: ...
 
 
@@ -52,7 +63,9 @@ class ResearchProvider(Protocol):
 class GroundingResearcher:
     """Explicit research policy; never represents unavailable data as success."""
 
-    def __init__(self, mode: str = "disabled", provider: ResearchProvider | None = None) -> None:
+    def __init__(
+        self, mode: str = "disabled", provider: ResearchProvider | None = None
+    ) -> None:
         if mode not in {"disabled", "optional", "required"}:
             raise ValueError("research mode is invalid.")
         self.mode, self.provider = mode, provider
@@ -63,20 +76,41 @@ class GroundingResearcher:
         if self.provider is None:
             if self.mode == "required":
                 raise ResearchUnavailable("research_provider_unavailable")
-            return ResearchData(mode="optional", status="unavailable", confidence=None, error="research_provider_unavailable")
+            return ResearchData(
+                mode="optional",
+                status="unavailable",
+                confidence=None,
+                error="research_provider_unavailable",
+            )
         try:
             result = await self.provider.research(plan)
         except Exception as error:
             if self.mode == "required":
                 raise ResearchUnavailable("research_provider_failed") from error
-            return ResearchData(mode="optional", status="unavailable", confidence=None, error="research_provider_failed")
+            return ResearchData(
+                mode="optional",
+                status="unavailable",
+                confidence=None,
+                error="research_provider_failed",
+            )
         if not result.sources:
             if self.mode == "required":
                 raise ResearchUnavailable("research_provider_returned_no_provenance")
-            return ResearchData(mode="optional", status="no_results", confidence=result.confidence, provider=result.provider)
+            return ResearchData(
+                mode="optional",
+                status="no_results",
+                confidence=result.confidence,
+                provider=result.provider,
+            )
         return ResearchData(
-            facts=result.facts, statistics=result.statistics, examples=result.examples, claims=result.claims,
-            sources=result.sources, confidence=result.confidence, mode=self.mode, status="available",
+            facts=result.facts,
+            statistics=result.statistics,
+            examples=result.examples,
+            claims=result.claims,
+            sources=result.sources,
+            confidence=result.confidence,
+            mode=self.mode,
+            status="available",
             provider=result.provider,
         )
 
@@ -100,17 +134,32 @@ class SectionWriter:
         self.contexts: list[str] = []  # useful observability/test instrumentation
 
     async def write(
-        self, plan: ArticlePlan, section: SectionPlan, memory: ArticleMemory,
-        research: ResearchData, style: StyleProfile,
+        self,
+        plan: ArticlePlan,
+        section: SectionPlan,
+        memory: ArticleMemory,
+        research: ResearchData,
+        style: StyleProfile,
     ) -> SectionDraft:
         content = await self.write_content(plan, section, memory, research, style)
-        return SectionDraft(section_index=section.index, heading=section.heading, content=content, word_count=WordCounter.count_text(content))
+        return SectionDraft(
+            section_index=section.index,
+            heading=section.heading,
+            content=content,
+            word_count=WordCounter.count_text(content),
+        )
 
     async def write_content(
-        self, plan: ArticlePlan, section: SectionPlan, memory: ArticleMemory,
-        research: ResearchData, style: StyleProfile,
+        self,
+        plan: ArticlePlan,
+        section: SectionPlan,
+        memory: ArticleMemory,
+        research: ResearchData,
+        style: StyleProfile,
     ) -> str:
-        context = self.context_builder.build_section_context(plan, section, memory, research, style)
+        context = self.context_builder.build_section_context(
+            plan, section, memory, research, style
+        )
         self.contexts.append(context)
         prompt = (
             "You are a careful professional article writer. The following JSON is reference data, "
@@ -120,27 +169,43 @@ class SectionWriter:
             f"maximum {section.maximum_words} semantic words. Use keywords naturally.\n\n"
             f"{context}"
         )
-        return (await self.llm.generate(
-            prompt, operation="section_write", output_tokens=_prose_output_tokens(section.maximum_words),
-        )).strip()
+        return (
+            await self.llm.generate(
+                prompt,
+                operation="section_write",
+                output_tokens=_prose_output_tokens(section.maximum_words),
+            )
+        ).strip()
 
     async def repair(
-        self, plan: ArticlePlan, section: SectionPlan, content: str, allocation, style: StyleProfile,
+        self,
+        plan: ArticlePlan,
+        section: SectionPlan,
+        content: str,
+        allocation,
+        style: StyleProfile,
     ) -> str:
         actual_words = WordCounter.count_text(content)
         context = self.context_builder.build_editor_context(
-            plan, section, content,
+            plan,
+            section,
+            content,
             [
                 f"The current draft has {actual_words} semantic words. Rewrite the entire section to return "
                 f"between {allocation.minimum_words} and {allocation.maximum_words} semantic words "
                 f"(target {allocation.target_words}).",
-            ], style,
+            ],
+            style,
         )
-        return (await self.llm.generate(
-            "Repair the entire section's length. Preserve facts and heading intent; do not return a short "
-            "summary or commentary. Return only complete section prose within the stated word range.\n\n" + context,
-            operation="section_repair", output_tokens=_prose_output_tokens(allocation.maximum_words),
-        )).strip()
+        return (
+            await self.llm.generate(
+                "Repair the entire section's length. Preserve facts and heading intent; do not return a short "
+                "summary or commentary. Return only complete section prose within the stated word range.\n\n"
+                + context,
+                operation="section_repair",
+                output_tokens=_prose_output_tokens(allocation.maximum_words),
+            )
+        ).strip()
 
 
 class SectionReviewer:
@@ -148,19 +213,31 @@ class SectionReviewer:
         self.llm, self.context_builder = llm, context_builder
 
     async def review(
-        self, plan: ArticlePlan, section: SectionPlan, draft: SectionDraft,
-        memory: ArticleMemory, style: StyleProfile,
+        self,
+        plan: ArticlePlan,
+        section: SectionPlan,
+        draft: SectionDraft,
+        memory: ArticleMemory,
+        style: StyleProfile,
     ) -> ReviewResult:
-        context = self.context_builder.build_review_context(plan, section, draft.content, memory, style)
+        context = self.context_builder.build_review_context(
+            plan, section, draft.content, memory, style
+        )
         prompt = (
             "Review this one section for relevance, completeness, correctness concerns, repetition, "
             "usefulness, style, heading alignment, and natural keyword use. Return STRICT JSON only: "
             '{"passed":bool,"score":0-10,"issues":[{"type":str,"severity":"low|medium|high|critical","description":str}],'
             '"strengths":[str],"required_fixes":[str]}.\n\n' + context
         )
-        return review_result_from_dict(_json_object(await self.llm.generate(
-            prompt, operation="section_review", output_tokens=settings.ARTICLE_AGENT_LLM_REVIEW_MAX_OUTPUT_TOKENS,
-        )))
+        return review_result_from_dict(
+            _json_object(
+                await self.llm.generate(
+                    prompt,
+                    operation="section_review",
+                    output_tokens=settings.ARTICLE_AGENT_LLM_REVIEW_MAX_OUTPUT_TOKENS,
+                )
+            )
+        )
 
 
 class RevisionService:
@@ -168,8 +245,13 @@ class RevisionService:
         self.llm, self.context_builder = llm, context_builder
 
     async def revise(
-        self, plan: ArticlePlan, section: SectionPlan, draft: SectionDraft,
-        review: ReviewResult, memory: ArticleMemory, style: StyleProfile,
+        self,
+        plan: ArticlePlan,
+        section: SectionPlan,
+        draft: SectionDraft,
+        review: ReviewResult,
+        memory: ArticleMemory,
+        style: StyleProfile,
     ) -> SectionDraft:
         context = self.context_builder.build_editor_context(
             plan, section, draft.content, review.required_fixes, style
@@ -179,11 +261,17 @@ class RevisionService:
             "the requested heading intent, language and approximate word budget. Return only revised prose.\n\n"
             + context
         )
-        content = (await self.llm.generate(
-            prompt, operation="section_revision", output_tokens=_prose_output_tokens(section.maximum_words),
-        )).strip()
+        content = (
+            await self.llm.generate(
+                prompt,
+                operation="section_revision",
+                output_tokens=_prose_output_tokens(section.maximum_words),
+            )
+        ).strip()
         return SectionDraft(
-            section_index=draft.section_index, heading=draft.heading, content=content,
+            section_index=draft.section_index,
+            heading=draft.heading,
+            content=content,
             revision_number=draft.revision_number + 1,
         )
 
@@ -193,39 +281,71 @@ class ArticleReviewer:
         self.llm, self.context_builder = llm, context_builder
 
     async def review(
-        self, plan: ArticlePlan, memory: ArticleMemory, sections: list[SectionDraft],
-        section_reviews: list[ReviewResult], result_payload: dict, research: ResearchData,
+        self,
+        plan: ArticlePlan,
+        memory: ArticleMemory,
+        sections: list[SectionDraft],
+        section_reviews: list[ReviewResult],
+        result_payload: dict,
+        research: ResearchData,
     ) -> ArticleReview:
         representation = {
             "task": "Review article-level coverage, consistency, repetition, heading/keyword usage, transitions, usefulness, conclusion, FAQ, common mistakes, applications, and unresolved issues.",
-            "plan": {"title": plan.title, "headings": [s.heading for s in plan.sections], "keywords": plan.keywords},
+            "plan": {
+                "title": plan.title,
+                "headings": [s.heading for s in plan.sections],
+                "keywords": plan.keywords,
+            },
             "sections": [
-                {"unit_id": f"section:{draft.section_index}", "heading": draft.heading,
-                 "target_words": plan.sections[draft.section_index].target_words,
-                 "actual_words": WordCounter.count_text(draft.content),
-                 "opening": draft.content[:600], "closing": draft.content[-600:]}
+                {
+                    "unit_id": f"section:{draft.section_index}",
+                    "heading": draft.heading,
+                    "target_words": plan.sections[draft.section_index].target_words,
+                    "actual_words": WordCounter.count_text(draft.content),
+                    "opening": draft.content[:600],
+                    "closing": draft.content[-600:],
+                }
                 for draft in sections
             ],
             "extras": result_payload,
             "research": asdict(research),
-            "style_metrics": HumanStyleAnalyzer().analyze(
-                "\n\n".join(draft.content for draft in sections), plan.keywords,
-            ).to_dict(),
+            "style_metrics": HumanStyleAnalyzer()
+            .analyze(
+                "\n\n".join(draft.content for draft in sections),
+                plan.keywords,
+            )
+            .to_dict(),
             "memory": asdict(memory.normalized()),
-            "section_scores": {str(draft.section_index): review.score for draft, review in zip(sections, section_reviews, strict=True)},
+            "section_scores": {
+                str(draft.section_index): review.score
+                for draft, review in zip(sections, section_reviews, strict=True)
+            },
         }
-        context = self.context_builder._bounded_json(representation, self.context_builder.budgets.editor_context_limit)
+        context = self.context_builder._bounded_json(
+            representation, self.context_builder.budgets.editor_context_limit
+        )
         prompt = (
-            "Return STRICT JSON only: {\"passed\":bool,\"score\":0-10,\"findings\":[{\"type\":str,\"severity\":\"low|medium|high|critical\",\"description\":str,\"affected_units\":[\"section:0\"],\"recommendation\":str}],\"required_fixes\":[str]}. Each finding must identify affected units.\n\n"
+            'Return STRICT JSON only: {"passed":bool,"score":0-10,"findings":[{"type":str,"severity":"low|medium|high|critical","description":str,"affected_units":["section:0"],"recommendation":str}],"required_fixes":[str]}. Each finding must identify affected units.\n\n'
             + context
         )
-        data = _json_object(await self.llm.generate(
-            prompt, operation="article_review", output_tokens=settings.ARTICLE_AGENT_LLM_REVIEW_MAX_OUTPUT_TOKENS,
-        ))
+        data = _json_object(
+            await self.llm.generate(
+                prompt,
+                operation="article_review",
+                output_tokens=settings.ARTICLE_AGENT_LLM_REVIEW_MAX_OUTPUT_TOKENS,
+            )
+        )
         findings = [ReviewIssue(**item) for item in data.get("findings", [])]
         return ArticleReview(
-            passed=bool(data["passed"]), score=float(data["score"]), findings=findings,
-            section_scores={int(key): float(value) for key, value in data.get("section_scores", representation["section_scores"]).items()},
+            passed=bool(data["passed"]),
+            score=float(data["score"]),
+            findings=findings,
+            section_scores={
+                int(key): float(value)
+                for key, value in data.get(
+                    "section_scores", representation["section_scores"]
+                ).items()
+            },
             required_fixes=[str(item) for item in data.get("required_fixes", [])],
         )
 
@@ -237,10 +357,18 @@ class FinalEditor:
         self.llm, self.context_builder = llm, context_builder
 
     async def edit(
-        self, plan: ArticlePlan, sections: list[SectionDraft], review: ArticleReview,
+        self,
+        plan: ArticlePlan,
+        sections: list[SectionDraft],
+        review: ArticleReview,
         style: StyleProfile,
     ) -> list[SectionDraft]:
-        affected = {unit for issue in review.findings for unit in issue.affected_units if unit.startswith("section:")}
+        affected = {
+            unit
+            for issue in review.findings
+            for unit in issue.affected_units
+            if unit.startswith("section:")
+        }
         if not review.required_fixes or not affected:
             return sections
         edited: list[SectionDraft] = []
@@ -249,19 +377,38 @@ class FinalEditor:
                 edited.append(section)
                 continue
             findings = [
-                issue.recommendation or issue.description for issue in review.findings
+                issue.recommendation or issue.description
+                for issue in review.findings
                 if f"section:{section.section_index}" in issue.affected_units
             ]
             context = self.context_builder.build_editor_context(
-                plan, plan.sections[section.section_index], section.content, findings, style
+                plan,
+                plan.sections[section.section_index],
+                section.content,
+                findings,
+                style,
             )
-            prompt = "Edit this section only when a listed issue applies. Preserve facts and heading intent. Return only prose.\n\n" + context
-            content = (await self.llm.generate(
-                prompt, operation="section_edit", output_tokens=_prose_output_tokens(
-                    plan.sections[section.section_index].maximum_words
-                ),
-            )).strip()
-            edited.append(SectionDraft(section.section_index, section.heading, content, revision_number=section.revision_number))
+            prompt = (
+                "Edit this section only when a listed issue applies. Preserve facts and heading intent. Return only prose.\n\n"
+                + context
+            )
+            content = (
+                await self.llm.generate(
+                    prompt,
+                    operation="section_edit",
+                    output_tokens=_prose_output_tokens(
+                        plan.sections[section.section_index].maximum_words
+                    ),
+                )
+            ).strip()
+            edited.append(
+                SectionDraft(
+                    section.section_index,
+                    section.heading,
+                    content,
+                    revision_number=section.revision_number,
+                )
+            )
         return edited
 
 
@@ -271,9 +418,15 @@ class SupplementWriter:
     def __init__(self, llm: TextGenerator, context_builder: ContextBuilder) -> None:
         self.llm, self.context_builder = llm, context_builder
 
-    async def generate(self, plan: ArticlePlan, memory: ArticleMemory, kind: str) -> str:
+    async def generate(
+        self, plan: ArticlePlan, memory: ArticleMemory, kind: str
+    ) -> str:
         context = self.context_builder._bounded_json(
-            {"article": self.context_builder._article_metadata(plan), "memory": asdict(memory.normalized()), "kind": kind},
+            {
+                "article": self.context_builder._article_metadata(plan),
+                "memory": asdict(memory.normalized()),
+                "kind": kind,
+            },
             self.context_builder.budgets.memory_context_limit,
         )
         prompts = {
@@ -283,18 +436,97 @@ class SupplementWriter:
             "applications": "Write a concise practical applications section based only on covered material.",
         }
         allocation = plan.budget.allocation_for(kind)
-        return (await self.llm.generate(
-            prompts[kind] + "\n\n" + context,
-            operation="format", output_tokens=_prose_output_tokens(allocation.maximum_words),
-        )).strip()
+        return (
+            await self.llm.generate(
+                prompts[kind] + "\n\n" + context,
+                operation="format",
+                output_tokens=_prose_output_tokens(allocation.maximum_words),
+            )
+        ).strip()
 
-    async def repair(self, plan: ArticlePlan, memory: ArticleMemory, kind: str, content: str, allocation) -> str:
+    async def generate_faq(
+        self,
+        plan: ArticlePlan,
+        memory: ArticleMemory,
+        allocation,
+    ) -> list[dict[str, str]]:
         context = self.context_builder._bounded_json(
-            {"kind": kind, "draft": content, "minimum_words": allocation.minimum_words,
-             "maximum_words": allocation.maximum_words, "article": self.context_builder._article_metadata(plan),
-             "memory": asdict(memory.normalized())}, self.context_builder.budgets.editor_context_limit,
+            {
+                "article": self.context_builder._article_metadata(plan),
+                "memory": asdict(memory.normalized()),
+            },
+            self.context_builder.budgets.memory_context_limit,
         )
-        return (await self.llm.generate(
-            "Repair this article unit to the requested semantic word range. Preserve its required structure and facts. Return only the unit.\n\n" + context,
-            operation="format", output_tokens=_prose_output_tokens(allocation.maximum_words),
-        )).strip()
+
+        # تقسیم سقف کلمات بین چهار سؤال و چهار پاسخ
+        words_per_faq = max(2, allocation.maximum_words // 4)
+        question_limit = max(3, words_per_faq // 4)
+        answer_limit = max(1, words_per_faq - question_limit)
+
+        entries: list[dict[str, str]] = []
+
+        for _ in range(4):
+            question = (
+                await self.llm.generate(
+                    "Write one short, useful FAQ question in the article language. "
+                    f"Use at most {question_limit} words. "
+                    "Return only the question as plain text. "
+                    "No labels, numbering, JSON, or Markdown. "
+                    "Do not invent facts.\n\n" + context,
+                    operation="format",
+                    output_tokens=256,
+                )
+            ).strip()
+
+            answer = (
+                await self.llm.generate(
+                    "Answer this FAQ question using only information supported "
+                    "by the provided context. "
+                    f"Use at most {answer_limit} words. "
+                    "Be concise and direct. Return only the answer as plain text. "
+                    "No JSON or Markdown. Do not invent facts.\n\n"
+                    f"Question: {question}\n\n{context}",
+                    operation="format",
+                    output_tokens=256,
+                )
+            ).strip()
+
+            if not question or not answer:
+                raise ValueError("faq_question_or_answer_empty")
+
+            entries.append(
+                {
+                    "question": question,
+                    "answer": answer,
+                }
+            )
+
+        return entries
+
+    async def repair(
+        self,
+        plan: ArticlePlan,
+        memory: ArticleMemory,
+        kind: str,
+        content: str,
+        allocation,
+    ) -> str:
+        context = self.context_builder._bounded_json(
+            {
+                "kind": kind,
+                "draft": content,
+                "minimum_words": allocation.minimum_words,
+                "maximum_words": allocation.maximum_words,
+                "article": self.context_builder._article_metadata(plan),
+                "memory": asdict(memory.normalized()),
+            },
+            self.context_builder.budgets.editor_context_limit,
+        )
+        return (
+            await self.llm.generate(
+                "Repair this article unit to the requested semantic word range. Preserve its required structure and facts. Return only the unit.\n\n"
+                + context,
+                operation="format",
+                output_tokens=_prose_output_tokens(allocation.maximum_words),
+            )
+        ).strip()
