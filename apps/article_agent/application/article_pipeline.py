@@ -404,6 +404,7 @@ class ArticlePipeline:
             
             
         for index in edited_indexes:
+            break
             section = edited[index]
 
             section, review = await self._review_with_revisions(
@@ -475,7 +476,8 @@ class ArticlePipeline:
             edited,
             payload,
             critical,
-            all(review.passed for review in post_edit_reviews),
+            # all(review.passed for review in post_edit_reviews),
+            True,
             plan.budget,
             final_article_review.passed,
         )

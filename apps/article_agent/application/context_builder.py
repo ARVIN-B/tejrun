@@ -33,7 +33,9 @@ class ContextBuilder:
         self.budgets = budgets or ContextBudgets()
 
     def build_planner_context(self, request: dict[str, Any]) -> str:
-        return self._bounded_json({"request": request}, self.budgets.planner_context_limit)
+        return self._bounded_json(
+            {"request": request}, self.budgets.planner_context_limit
+        )
 
     def build_research_context(
         self, plan: ArticlePlan, section: SectionPlan | None = None
@@ -57,7 +59,11 @@ class ContextBuilder:
         payload = {
             "task": "Write only the requested section.",
             "section": asdict(section),
-            "budget": {"target_words": section.target_words, "minimum_words": section.minimum_words, "maximum_words": section.maximum_words},
+            "budget": {
+                "target_words": section.target_words,
+                "minimum_words": section.minimum_words,
+                "maximum_words": section.maximum_words,
+            },
             "research": asdict(research),
             "memory": self._relevant_memory(memory, section),
             "style": asdict(style),
@@ -77,7 +83,11 @@ class ContextBuilder:
         payload = {
             "task": "Review the supplied draft against this section plan.",
             "section": asdict(section),
-            "budget": {"target_words": section.target_words, "minimum_words": section.minimum_words, "maximum_words": section.maximum_words},
+            "budget": {
+                "target_words": section.target_words,
+                "minimum_words": section.minimum_words,
+                "maximum_words": section.maximum_words,
+            },
             "draft": draft_text,
             "memory": asdict(memory.normalized()),
             "style": asdict(style),
@@ -104,7 +114,11 @@ class ContextBuilder:
         payload = {
             "task": "Apply only the listed justified edits to this section.",
             "section": asdict(section),
-            "budget": {"target_words": section.target_words, "minimum_words": section.minimum_words, "maximum_words": section.maximum_words},
+            "budget": {
+                "target_words": section.target_words,
+                "minimum_words": section.minimum_words,
+                "maximum_words": section.maximum_words,
+            },
             "draft": draft_text,
             "findings": findings,
             "style": asdict(style),
@@ -132,7 +146,11 @@ class ContextBuilder:
     @staticmethod
     def _relevant_memory(memory: ArticleMemory, section: SectionPlan) -> dict[str, Any]:
         """Select memory deterministically by current heading/key-point relevance."""
-        query = set(" ".join([section.heading, *section.key_points, *section.keywords]).casefold().split())
+        query = set(
+            " ".join([section.heading, *section.key_points, *section.keywords])
+            .casefold()
+            .split()
+        )
         normalized = asdict(memory.normalized())
         selected: dict[str, Any] = {}
         for field, items in normalized.items():
@@ -140,8 +158,10 @@ class ContextBuilder:
                 selected[field] = items
                 continue
             ranked = sorted(
-                enumerate(items), key=lambda pair: (
-                    -len(query.intersection(pair[1].casefold().split())), -pair[0]
+                enumerate(items),
+                key=lambda pair: (
+                    -len(query.intersection(pair[1].casefold().split())),
+                    -pair[0],
                 ),
             )
             # Claims, unresolved threads and anti-repetition signals remain
@@ -182,7 +202,11 @@ class ContextBuilder:
                 # Required content exceeds the ceiling. Preserve the task,
                 # current unit/budget and valid JSON rather than silently
                 # replacing the context with metadata-only output.
-                fallback = {key: compacted[key] for key in ("task", "section", "budget", "draft") if key in compacted}
+                fallback = {
+                    key: compacted[key]
+                    for key in ("task", "section", "budget", "draft")
+                    if key in compacted
+                }
                 fallback["truncated"] = True
                 return json.dumps(fallback, ensure_ascii=False, separators=(",", ":"))
 
@@ -203,12 +227,34 @@ class ContextBuilder:
             return " ".join(words[: max(1, len(words) // 2)])
         return value
 
+    # @staticmethod
+    # def _compact(value: Any) -> Any:
+    #     if isinstance(value, dict):
+    #         return {key: ContextBuilder._compact(item) for key, item in value.items()}
+    #     if isinstance(value, list):
+    #         return [ContextBuilder._compact(item) for item in value[:3]]
+    #     if isinstance(value, str) and len(value) > 500:
+    #         return value[:497] + "…"
+    #     return value
+
     @staticmethod
-    def _compact(value: Any) -> Any:
+    def _compact(value: Any, *, preserve_text: bool = False) -> Any:
+        """Compact optional context without truncating the actual draft."""
         if isinstance(value, dict):
-            return {key: ContextBuilder._compact(item) for key, item in value.items()}
+            return {
+                key: ContextBuilder._compact(
+                    item,
+                    preserve_text=preserve_text or key == "draft",
+                )
+                for key, item in value.items()
+            }
+
         if isinstance(value, list):
             return [ContextBuilder._compact(item) for item in value[:3]]
+
         if isinstance(value, str) and len(value) > 500:
+            if preserve_text:
+                return value
             return value[:497] + "…"
+
         return value
