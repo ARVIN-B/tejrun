@@ -394,12 +394,47 @@ class GroqClient:
                             type(error).__name__,
                         )
                         break
+
                     if self._status(error) == 429:
+                        headers = self._headers(error)
+
+                        # فقط هدرهای مرتبط با محدودیت و شناسه درخواست
+                        rate_limit_headers = {
+                            key: value
+                            for key, value in headers.items()
+                            if (
+                                "ratelimit" in key.lower()
+                                or key.lower() == "retry-after"
+                                or "request-id" in key.lower()
+                            )
+                        }
+
+                        response = getattr(error, "response", None)
+                        body = getattr(error, "body", None)
+
+                        # تلاش برای خواندن بدنه پاسخ در صورت در دسترس نبودن error.body
+                        if body is None and response is not None:
+                            try:
+                                body = response.text
+                            except Exception:
+                                body = None
+
+                        logger.warning(
+                            "Groq 429 diagnostics: model=%s operation=%s "
+                            "retry_after=%s headers=%s body=%r",
+                            model,
+                            operation,
+                            self._retry_after(error),
+                            rate_limit_headers,
+                            str(body)[:2000] if body is not None else None,
+                        )
+
                         raise ProviderRateLimitError(
                             model=model,
                             retry_after=self._retry_after(error),
                             detail=type(error).__name__,
                         ) from error
+
                     if self._is_transient(error):
                         if isinstance(error, ProviderTransientError):
                             raise
