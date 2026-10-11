@@ -8,15 +8,22 @@ from django.test import SimpleTestCase, override_settings
 
 from apps.article_agent.infrastructure.ai.groq_client import (
     GroqClient,
+    ProviderContextLimitError,
     ProviderEmptyResponseError,
     ProviderRateLimitError,
 )
-from apps.article_agent.infrastructure.rate_limit import RateLimitExceeded, Reservation
+from apps.article_agent.infrastructure.rate_limit import (
+    QuotaLimit,
+    RateLimitExceeded,
+    RateLimitPolicy,
+    Reservation,
+)
 
 
 class FakeLimiter:
-    def __init__(self, outcomes=()):
+    def __init__(self, outcomes=(), policy=None):
         self.outcomes = list(outcomes)
+        self.policy = policy
         self.reservations = []
         self.settled = []
         self.released = []
@@ -143,6 +150,22 @@ class GroqClientGenerationTests(SimpleTestCase):
         self.assertEqual(limiter.settled[0][1:], (12, 8))
         self.assertEqual(model.calls[0]["extra_create_args"]["max_tokens"], 2000)
 
+    def test_completion_reservation_is_reduced_to_fit_the_configured_tpm(self) -> None:
+        limiter = FakeLimiter(
+            policy=RateLimitPolicy(
+                account=QuotaLimit(tokens_per_window=1_000)
+            )
+        )
+        model = FakeModelClient(response())
+        client = self.make_client(
+            limiter=limiter, clients={os.getenv("LLM_MODEL"): model}
+        )
+        # 400 UTF-8 bytes conservatively estimate to 200 input tokens, so a
+        # 900-token completion must be reduced to 800 before reservation.
+        self.assertEqual(asyncio.run(client.generate("x" * 400, output_tokens=900)), "ok")
+        self.assertEqual(limiter.reservations[0].output_tokens, 800)
+        self.assertEqual(model.calls[0]["extra_create_args"]["max_tokens"], 800)
+
     @override_settings(
         ARTICLE_AGENT_PRIMARY_MODEL="primary",
         ARTICLE_AGENT_FALLBACK_MODELS=("fallback",),
@@ -163,6 +186,23 @@ class GroqClientGenerationTests(SimpleTestCase):
         with self.assertRaises(ProviderRateLimitError) as raised:
             asyncio.run(client.generate("prompt"))
         self.assertEqual(raised.exception.retry_after, 7)
+        self.assertEqual(len(limiter.released), 1)
+
+    @override_settings(ARTICLE_AGENT_ENABLE_SECONDARY_API_KEY_FALLBACK=True)
+    @patch.dict(os.environ, {"LLM_API_KEY_2": "test-secondary-key"})
+    def test_provider_429_retries_once_with_secondary_credential(self) -> None:
+        limiter = FakeLimiter()
+        primary = FakeModelClient(error=Http429("daily quota"))
+        secondary = FakeModelClient(response("from secondary"))
+        model = os.getenv("LLM_MODEL")
+        client = self.make_client(
+            limiter=limiter,
+            clients={(model, 1): primary, (model, 2): secondary},
+        )
+
+        self.assertEqual(asyncio.run(client.generate("prompt")), "from secondary")
+        self.assertEqual(len(primary.calls), 1)
+        self.assertEqual(len(secondary.calls), 1)
         self.assertEqual(len(limiter.released), 1)
 
     @override_settings(ARTICLE_AGENT_EMPTY_RESPONSE_RETRIES=1)
@@ -204,6 +244,22 @@ class GroqClientGenerationTests(SimpleTestCase):
         with self.assertRaises(ProviderTransientError):
             asyncio.run(client.generate("prompt"))
         self.assertEqual(len(limiter.released), 1)
+
+    @override_settings(
+        ARTICLE_AGENT_LLM_CONTEXT_WINDOW_TOKENS=1_024,
+        ARTICLE_AGENT_LLM_CONTEXT_SAFETY_TOKENS=64,
+    )
+    def test_oversized_prompt_is_never_sent_to_the_provider(self) -> None:
+        limiter = FakeLimiter()
+        model = FakeModelClient(response())
+        client = self.make_client(
+            limiter=limiter, clients={os.getenv("LLM_MODEL"): model}
+        )
+        with self.assertRaises(ProviderContextLimitError) as raised:
+            asyncio.run(client.generate("x" * 4_000, output_tokens=512))
+        self.assertIn("estimated_input_tokens", str(raised.exception))
+        self.assertFalse(model.calls)
+        self.assertFalse(limiter.reservations)
 
     def test_provider_5xx_is_normalized_and_releases_the_active_slot(self) -> None:
         limiter = FakeLimiter()

@@ -191,6 +191,14 @@ class DomainContractTests(unittest.TestCase):
         context = builder._bounded_json({"task": "required", "memory": {"x": "y" * 10000}}, 40)
         self.assertEqual(json.loads(context)["task"], "required")
 
+    def test_context_budget_is_a_hard_utf8_ceiling_for_large_persian_drafts(self) -> None:
+        builder = ContextBuilder()
+        context = builder._bounded_json(
+            {"task": "review", "draft": "متن آزمایشی " * 20_000}, 2_000
+        )
+        self.assertLessEqual(len(context.encode("utf-8")), 2_000)
+        self.assertTrue(json.loads(context)["truncated"])
+
     def test_memory_updater_keeps_compact_summaries_and_bounded_entries(self) -> None:
         updater = MemoryUpdater(MemoryBudget(max_items_per_field=2, max_summary_characters=40))
         section = SectionPlan(

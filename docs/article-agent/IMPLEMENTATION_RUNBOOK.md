@@ -91,3 +91,44 @@ zero words as a normal budget-repair result.
 - M4/M5/M10/M13/M14 have implementation plus targeted tests. Large-context and live Redis integration verification remain pending.
 - Latest local evidence: `.venv\\Scripts\\python.exe manage.py test apps.article_agent.tests --keepdb --verbosity 1` (63 passing), `.venv\\Scripts\\python.exe manage.py check` (pass), and `.venv\\Scripts\\python.exe manage.py makemigrations --check --dry-run` (no changes). Production deployment verification remains a server-side operation.
 - Next exact action: add renderer-failure resume coverage, then complete section/article review, style and lifecycle adversarial verification.
+
+## Context-window safety update (2026-10-10)
+
+- Every Article Agent provider call now has a configured context-window guard:
+  estimated UTF-8 input tokens + requested completion + safety margin must fit
+  before the request is sent.  A prevented request records model, operation,
+  input estimate, requested output, configured window and safety margin.
+- Long sections are generated as bounded installments. Only compressed article
+  memory and a 120-word trailing bridge are supplied to the next installment;
+  the accumulated section is never re-sent as prompt context.
+- Context JSON is constrained by UTF-8 bytes, not Python character count, and
+  compacts required draft data into valid JSON rather than returning an
+  oversized fallback. Provider 429/5xx details are logged and the job stores a
+  bounded actionable diagnostic.
+- Local evidence: focused context, provider-guard and domain tests pass. This
+  is not a configured-provider or Linux-server smoke test; the deployment must
+  set `ARTICLE_AGENT_LLM_CONTEXT_WINDOW_TOKENS` to the actual selected model's
+  context window and run a 5k/10k production smoke test.
+
+### TPM reservation follow-up
+
+- Context construction also reserves room for the effective local TPM quota
+  (`ARTICLE_AGENT_GROQ_TOKENS_PER_MINUTE` after its safety margin). This
+  prevents a context-window-safe revision from failing local preflight with
+  `combined_token_reservation_exceeds_window`.
+- The provider adapter makes a final per-model reservation adjustment when a
+  requested completion is larger than its configured account/model TPM can
+  ever accommodate. Remaining-minute exhaustion remains a retryable local
+  rate-limit event; a prompt that alone exceeds a configured input quota now
+  reports its exact input/quota cause.
+
+### Secondary provider credential fallback
+
+- With `ARTICLE_AGENT_ENABLE_SECONDARY_API_KEY_FALLBACK=true`, an actual
+  provider HTTP 429 first retries the identical bounded request once through
+  `LLM_API_KEY_2`; neither credential value is logged. A second 429 follows
+  the normal retry policy with the provider's Retry-After.
+- This cannot bypass a TPD quota shared by both keys. For the fallback to be
+  useful, `LLM_API_KEY_2` must have a separate Groq organization/project
+  quota. Configuration templates contain placeholders only; live keys belong
+  only in deployment secrets.

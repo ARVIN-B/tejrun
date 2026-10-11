@@ -55,6 +55,24 @@ class ProviderEmptyResponseError(ProviderTransientError):
         )
 
 
+class ProviderContextLimitError(RuntimeError):
+    """A request was rejected locally before it could exceed model context."""
+
+    def __init__(
+        self, *, model: str, operation: str, input_tokens: int, output_tokens: int
+    ) -> None:
+        self.model, self.operation = model, operation
+        self.input_tokens, self.output_tokens = input_tokens, output_tokens
+        self.context_window = settings.ARTICLE_AGENT_LLM_CONTEXT_WINDOW_TOKENS
+        super().__init__(
+            "provider_context_limit_prevented: "
+            f"model={model}; operation={operation}; estimated_input_tokens={input_tokens}; "
+            f"requested_output_tokens={output_tokens}; context_window_tokens={self.context_window}; "
+            f"safety_tokens={settings.ARTICLE_AGENT_LLM_CONTEXT_SAFETY_TOKENS}. "
+            "The request was not sent. Reduce context or split the operation."
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ModelRoute:
     primary: str
@@ -127,7 +145,7 @@ class GroqClient:
                 ),
             ),
         )
-        self._model_clients: dict[str, OpenAIChatCompletionClient] = {}
+        self._model_clients: dict[object, OpenAIChatCompletionClient] = {}
 
     @staticmethod
     def _route_from_settings() -> ModelRoute:
@@ -168,11 +186,24 @@ class GroqClient:
             result[model] = _quota_from_config(raw, model=model)
         return result
 
-    def _client_for(self, model: str) -> OpenAIChatCompletionClient:
-        if model not in self._model_clients:
-            self._model_clients[model] = OpenAIChatCompletionClient(
+    def _client_for(
+        self, model: str, *, credential_slot: int = 1
+    ) -> OpenAIChatCompletionClient:
+        key = (model, credential_slot)
+        # Compatibility for injected test adapters that use a model-only key.
+        if key not in self._model_clients and model in self._model_clients:
+            return self._model_clients[model]
+        if key not in self._model_clients:
+            environment_key = "LLM_API_KEY_2" if credential_slot == 2 else "LLM_API_KEY"
+            api_key = os.getenv(environment_key)
+            if not api_key:
+                raise RuntimeError(
+                    f"provider_credential_missing: credential_slot={credential_slot}; "
+                    f"environment_variable={environment_key}"
+                )
+            self._model_clients[key] = OpenAIChatCompletionClient(
                 model=model,
-                api_key=os.getenv("LLM_API_KEY"),
+                api_key=api_key,
                 base_url=os.getenv("LLM_BASE_URL"),
                 model_info={
                     "vision": False,
@@ -183,7 +214,14 @@ class GroqClient:
                 },
                 max_tokens=settings.ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS,
             )
-        return self._model_clients[model]
+        return self._model_clients[key]
+
+    @staticmethod
+    def _secondary_credential_available() -> bool:
+        return (
+            settings.ARTICLE_AGENT_ENABLE_SECONDARY_API_KEY_FALLBACK
+            and bool(os.getenv("LLM_API_KEY_2"))
+        )
 
     @staticmethod
     def estimate_input_tokens(prompt: str) -> int:
@@ -286,12 +324,34 @@ class GroqClient:
 
         raise RuntimeError("Rate-limit retry loop ended unexpectedly.")
 
+    def _quota_output_ceiling(self, input_tokens: int, model: str) -> int | None:
+        """Maximum output that can ever fit one local reservation.
+
+        This is distinct from remaining capacity in the current minute: the
+        Redis reservation still decides that and may return RateLimitExceeded.
+        Here we only avoid an impossible per-call ReservationTooLarge error.
+        """
+        policy = getattr(self.limiter, "policy", None)
+        if policy is None:
+            return None
+        quotas = (policy.account, policy.model_limit_for(model))
+        ceilings: list[int] = []
+        for quota in quotas:
+            if quota.tokens_per_window:
+                ceilings.append(quota.tokens_per_window - input_tokens)
+            if quota.input_tokens_per_window and input_tokens > quota.input_tokens_per_window:
+                return 0
+            if quota.output_tokens_per_window:
+                ceilings.append(quota.output_tokens_per_window)
+        return min(ceilings) if ceilings else None
+
     async def generate(
         self,
         prompt: str,
         *,
         operation: str = "writing",
         output_tokens: int | None = None,
+        _credential_slot: int = 1,
     ) -> str:
         if not prompt.strip():
             raise ValueError("Refusing to send an empty provider prompt.")
@@ -301,8 +361,38 @@ class GroqClient:
         )
         input_tokens = self.estimate_input_tokens(prompt)
         candidates = self.route.candidates(operation)
+        if (
+            input_tokens
+            + output_tokens
+            + settings.ARTICLE_AGENT_LLM_CONTEXT_SAFETY_TOKENS
+            > settings.ARTICLE_AGENT_LLM_CONTEXT_WINDOW_TOKENS
+        ):
+            raise ProviderContextLimitError(
+                model=candidates[0],
+                operation=operation,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
         last_error: Exception | None = None
         for index, model in enumerate(candidates):
+            quota_ceiling = self._quota_output_ceiling(input_tokens, model)
+            if quota_ceiling is not None:
+                if quota_ceiling < 1:
+                    raise RuntimeError(
+                        "provider_quota_input_too_large: "
+                        f"model={model}; operation={operation}; estimated_input_tokens={input_tokens}; "
+                        "the configured one-minute token quota cannot fit the prompt. "
+                        "Context compaction must be increased or the configured quota must be corrected."
+                    )
+                if output_tokens > quota_ceiling:
+                    logger.info(
+                        "Reducing Article Agent completion reservation for model=%s operation=%s from=%s to=%s to fit configured TPM.",
+                        model,
+                        operation,
+                        output_tokens,
+                        quota_ceiling,
+                    )
+                    output_tokens = quota_ceiling
             for empty_attempt in range(
                 settings.ARTICLE_AGENT_EMPTY_RESPONSE_RETRIES + 1
             ):
@@ -319,7 +409,9 @@ class GroqClient:
                     
                     
                     result = await asyncio.wait_for(
-                        self._client_for(model).create(
+                        self._client_for(
+                            model, credential_slot=_credential_slot
+                        ).create(
                             messages=[UserMessage(content=prompt, source="user")],
                             # extra_create_args={"max_tokens": output_tokens},
                             extra_create_args={
@@ -386,6 +478,22 @@ class GroqClient:
                             operation,
                         )
                         continue
+                    if (
+                        self._status(error) == 429
+                        and _credential_slot == 1
+                        and self._secondary_credential_available()
+                    ):
+                        logger.warning(
+                            "Provider HTTP 429 for model=%s operation=%s; retrying once with credential_slot=2.",
+                            model,
+                            operation,
+                        )
+                        return await self.generate(
+                            prompt,
+                            operation=operation,
+                            output_tokens=output_tokens,
+                            _credential_slot=2,
+                        )
                     if index + 1 < len(candidates) and self._can_fallback(error):
                         logger.warning(
                             "Article Agent fallback candidate after model=%s operation=%s reason=%s",
@@ -432,14 +540,18 @@ class GroqClient:
                         raise ProviderRateLimitError(
                             model=model,
                             retry_after=self._retry_after(error),
-                            detail=type(error).__name__,
+                            detail=(
+                                f"{type(error).__name__}: "
+                                f"{str(body or error)[:2_000]}"
+                            ),
                         ) from error
 
                     if self._is_transient(error):
                         if isinstance(error, ProviderTransientError):
                             raise
                         raise ProviderTransientError(
-                            model=model, detail=type(error).__name__
+                            model=model,
+                            detail=f"{type(error).__name__}: {str(error)[:2_000]}",
                         ) from error
                     raise
         raise AssertionError("Model route produced no candidates.")
@@ -447,7 +559,7 @@ class GroqClient:
     async def close(self) -> None:
         try:
             await asyncio.gather(
-                *(client.close() for client in self._model_clients.values())
+                *(client.close() for client in set(self._model_clients.values()))
             )
         finally:
             await self.limiter.close()

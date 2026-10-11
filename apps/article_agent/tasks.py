@@ -17,6 +17,12 @@ from apps.article_agent.models import ArticleJob, JobStatus
 logger = logging.getLogger(__name__)
 
 
+def _error_details(error: Exception, *, limit: int = 500) -> str:
+    """Safe, actionable diagnostics for the dashboard and worker logs."""
+    detail = " ".join(str(error).split()) or error.__class__.__name__
+    return f"{error.__class__.__name__}: {detail}"[:limit]
+
+
 def _is_rate_limited(error: Exception) -> bool:
     if isinstance(error, (RateLimitExceeded, ProviderRateLimitError)):
         return True
@@ -95,17 +101,18 @@ def generate_article_task(self, job_id: int) -> None:
             )
             countdown = _retry_delay(error, self.request.retries)
             logger.warning(
-                "Article job %s has %s; retrying in %s seconds",
+                "Article job %s has %s; retrying in %s seconds; diagnostics=%s",
                 job_id,
                 reason,
                 countdown,
+                _error_details(error),
             )
             raise self.retry(
                 exc=error,
                 countdown=countdown,
                 max_retries=settings.ARTICLE_AGENT_MAX_RETRIES,
             )
-        logger.exception("Article job %s failed", job_id)
+        logger.exception("Article job %s failed; diagnostics=%s", job_id, _error_details(error))
         ArticleJob.objects.filter(pk=job_id, celery_task_id=task_id).update(
             status=JobStatus.FAILED,
             current_stage="Failed",
@@ -114,7 +121,7 @@ def generate_article_task(self, job_id: int) -> None:
                 if _is_transient_provider_error(error)
                 else "generation_error"
             ),
-            error_message="Article generation encountered a temporary problem. Please retry.",
+            error_message=_error_details(error),
             updated_at=timezone.now(),
         )
         raise

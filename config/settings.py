@@ -186,6 +186,19 @@ ARTICLE_AGENT_LLM_TIMEOUT_SECONDS = int(
 ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS = int(
     os.getenv("ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS", "8192")
 )
+# This is a hard request-size guard, not a rate-limit setting.  Set it to the
+# context window of the deployed model.  Keeping a conservative default means
+# a mistaken model change fails safe (by splitting work) instead of sending an
+# oversized prompt to the provider.
+ARTICLE_AGENT_LLM_CONTEXT_WINDOW_TOKENS = int(
+    os.getenv("ARTICLE_AGENT_LLM_CONTEXT_WINDOW_TOKENS", "8192")
+)
+ARTICLE_AGENT_LLM_CONTEXT_SAFETY_TOKENS = int(
+    os.getenv("ARTICLE_AGENT_LLM_CONTEXT_SAFETY_TOKENS", "256")
+)
+ARTICLE_AGENT_LLM_PROMPT_OVERHEAD_TOKENS = int(
+    os.getenv("ARTICLE_AGENT_LLM_PROMPT_OVERHEAD_TOKENS", "512")
+)
 ARTICLE_AGENT_LLM_REVIEW_MAX_OUTPUT_TOKENS = int(
     os.getenv("ARTICLE_AGENT_LLM_REVIEW_MAX_OUTPUT_TOKENS", "1024")
 )
@@ -205,6 +218,14 @@ if ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS < 256 or ARTICLE_AGENT_LLM_REVIEW_MAX_OUT
     raise ImproperlyConfigured(
         "Article Agent LLM output limits are too small."
     )
+if (
+    ARTICLE_AGENT_LLM_CONTEXT_WINDOW_TOKENS < 1024
+    or ARTICLE_AGENT_LLM_CONTEXT_SAFETY_TOKENS < 0
+    or ARTICLE_AGENT_LLM_PROMPT_OVERHEAD_TOKENS < 0
+    or ARTICLE_AGENT_LLM_CONTEXT_SAFETY_TOKENS
+    + ARTICLE_AGENT_LLM_PROMPT_OVERHEAD_TOKENS >= ARTICLE_AGENT_LLM_CONTEXT_WINDOW_TOKENS
+):
+    raise ImproperlyConfigured("Article Agent context-window settings are invalid.")
 if ARTICLE_AGENT_OUTPUT_TOKENS_PER_WORD < 1 or ARTICLE_AGENT_OUTPUT_TOKEN_BUFFER < 0:
     raise ImproperlyConfigured("Article Agent output-token estimation settings are invalid.")
 if ARTICLE_AGENT_EMPTY_RESPONSE_RETRIES < 0 or ARTICLE_AGENT_EMPTY_RESPONSE_RETRIES > 3:
@@ -249,6 +270,9 @@ ARTICLE_AGENT_FALLBACK_MODELS = tuple(
 ARTICLE_AGENT_REVIEW_MODEL = os.getenv("ARTICLE_AGENT_REVIEW_MODEL", "").strip()
 ARTICLE_AGENT_FALLBACK_ON_PROVIDER_429 = os.getenv(
     "ARTICLE_AGENT_FALLBACK_ON_PROVIDER_429", "false"
+).lower() == "true"
+ARTICLE_AGENT_ENABLE_SECONDARY_API_KEY_FALLBACK = os.getenv(
+    "ARTICLE_AGENT_ENABLE_SECONDARY_API_KEY_FALLBACK", "false"
 ).lower() == "true"
 ARTICLE_AGENT_FALLBACK_ON_TRANSIENT_FAILURES = os.getenv(
     "ARTICLE_AGENT_FALLBACK_ON_TRANSIENT_FAILURES", "false"
