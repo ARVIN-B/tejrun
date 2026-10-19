@@ -169,6 +169,7 @@ class GroqClientGenerationTests(SimpleTestCase):
     @override_settings(
         ARTICLE_AGENT_PRIMARY_MODEL="primary",
         ARTICLE_AGENT_FALLBACK_MODELS=("fallback",),
+        ARTICLE_AGENT_REVIEW_MODEL="",
     )
     def test_model_quota_rejection_uses_configured_fallback_once(self) -> None:
         limiter = FakeLimiter([RateLimitExceeded("model_tokens", 4)])
@@ -188,22 +189,42 @@ class GroqClientGenerationTests(SimpleTestCase):
         self.assertEqual(raised.exception.retry_after, 7)
         self.assertEqual(len(limiter.released), 1)
 
-    @override_settings(ARTICLE_AGENT_ENABLE_SECONDARY_API_KEY_FALLBACK=True)
-    @patch.dict(os.environ, {"LLM_API_KEY_2": "test-secondary-key"})
-    def test_provider_429_retries_once_with_secondary_credential(self) -> None:
+    @override_settings(ARTICLE_AGENT_API_KEY_SLOTS=5)
+    @patch.dict(
+        os.environ,
+        {
+            "LLM_API_KEY_2": "test-secondary-key",
+            "LLM_API_KEY_3": "test-third-key",
+            "LLM_API_KEY_4": "test-fourth-key",
+            "LLM_API_KEY_5": "test-fifth-key",
+        },
+    )
+    def test_daily_token_limit_rotates_through_configured_credentials(self) -> None:
         limiter = FakeLimiter()
-        primary = FakeModelClient(error=Http429("daily quota"))
-        secondary = FakeModelClient(response("from secondary"))
+        primary = FakeModelClient(error=Http429("tokens per day exhausted"))
+        secondary = FakeModelClient(error=Http429("tokens per day exhausted"))
+        third = FakeModelClient(error=Http429("tokens per day exhausted"))
+        fourth = FakeModelClient(error=Http429("tokens per day exhausted"))
+        fifth = FakeModelClient(response("from fifth credential"))
         model = os.getenv("LLM_MODEL")
         client = self.make_client(
             limiter=limiter,
-            clients={(model, 1): primary, (model, 2): secondary},
+            clients={
+                (model, 1): primary,
+                (model, 2): secondary,
+                (model, 3): third,
+                (model, 4): fourth,
+                (model, 5): fifth,
+            },
         )
 
-        self.assertEqual(asyncio.run(client.generate("prompt")), "from secondary")
+        self.assertEqual(asyncio.run(client.generate("prompt")), "from fifth credential")
         self.assertEqual(len(primary.calls), 1)
         self.assertEqual(len(secondary.calls), 1)
-        self.assertEqual(len(limiter.released), 1)
+        self.assertEqual(len(third.calls), 1)
+        self.assertEqual(len(fourth.calls), 1)
+        self.assertEqual(len(fifth.calls), 1)
+        self.assertEqual(len(limiter.released), 4)
 
     @override_settings(ARTICLE_AGENT_EMPTY_RESPONSE_RETRIES=1)
     def test_empty_response_is_retried_locally_before_budget_manager_sees_it(
@@ -278,6 +299,7 @@ class GroqClientGenerationTests(SimpleTestCase):
     @override_settings(
         ARTICLE_AGENT_PRIMARY_MODEL="primary",
         ARTICLE_AGENT_FALLBACK_MODELS=("fallback",),
+        ARTICLE_AGENT_REVIEW_MODEL="",
     )
     def test_fallback_stops_after_each_candidate_is_rate_limited(self) -> None:
         limiter = FakeLimiter(

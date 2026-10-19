@@ -194,7 +194,7 @@ class GroqClient:
         if key not in self._model_clients and model in self._model_clients:
             return self._model_clients[model]
         if key not in self._model_clients:
-            environment_key = "LLM_API_KEY_2" if credential_slot == 2 else "LLM_API_KEY"
+            environment_key = self._credential_environment_key(credential_slot)
             api_key = os.getenv(environment_key)
             if not api_key:
                 raise RuntimeError(
@@ -217,11 +217,26 @@ class GroqClient:
         return self._model_clients[key]
 
     @staticmethod
-    def _secondary_credential_available() -> bool:
-        return (
-            settings.ARTICLE_AGENT_ENABLE_SECONDARY_API_KEY_FALLBACK
-            and bool(os.getenv("LLM_API_KEY_2"))
+    def _credential_environment_key(slot: int) -> str:
+        return "LLM_API_KEY" if slot == 1 else f"LLM_API_KEY_{slot}"
+
+    @classmethod
+    def _configured_credential_slots(cls) -> tuple[int, ...]:
+        return tuple(
+            slot
+            for slot in range(1, settings.ARTICLE_AGENT_API_KEY_SLOTS + 1)
+            if os.getenv(cls._credential_environment_key(slot))
         )
+
+    @staticmethod
+    def _is_daily_token_limit(error: Exception) -> bool:
+        """True only for the provider's TPD-style quota exhaustion response."""
+        detail = str(
+            getattr(error, "body", None)
+            or getattr(getattr(error, "response", None), "text", None)
+            or error
+        ).casefold()
+        return "tokens per day" in detail or "token per day" in detail or "tpd" in detail
 
     @staticmethod
     def estimate_input_tokens(prompt: str) -> int:
@@ -352,6 +367,7 @@ class GroqClient:
         operation: str = "writing",
         output_tokens: int | None = None,
         _credential_slot: int = 1,
+        _attempted_credential_slots: frozenset[int] = frozenset(),
     ) -> str:
         if not prompt.strip():
             raise ValueError("Refusing to send an empty provider prompt.")
@@ -478,21 +494,29 @@ class GroqClient:
                             operation,
                         )
                         continue
+                    available_slots = self._configured_credential_slots()
+                    attempted_slots = _attempted_credential_slots | {_credential_slot}
+                    next_slot = next(
+                        (slot for slot in available_slots if slot not in attempted_slots),
+                        None,
+                    )
                     if (
                         self._status(error) == 429
-                        and _credential_slot == 1
-                        and self._secondary_credential_available()
+                        and self._is_daily_token_limit(error)
+                        and next_slot is not None
                     ):
                         logger.warning(
-                            "Provider HTTP 429 for model=%s operation=%s; retrying once with credential_slot=2.",
+                            "Provider daily-token limit for model=%s operation=%s; retrying with credential_slot=%s.",
                             model,
                             operation,
+                            next_slot,
                         )
                         return await self.generate(
                             prompt,
                             operation=operation,
                             output_tokens=output_tokens,
-                            _credential_slot=2,
+                            _credential_slot=next_slot,
+                            _attempted_credential_slots=attempted_slots,
                         )
                     if index + 1 < len(candidates) and self._can_fallback(error):
                         logger.warning(

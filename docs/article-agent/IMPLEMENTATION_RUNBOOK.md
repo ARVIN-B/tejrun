@@ -132,3 +132,30 @@ zero words as a normal budget-repair result.
   useful, `LLM_API_KEY_2` must have a separate Groq organization/project
   quota. Configuration templates contain placeholders only; live keys belong
   only in deployment secrets.
+
+### Multi-key TPD fallback and Persian prompt standard (2026-10-11)
+
+- All production Article Agent LLM calls flow through `GroqClient`. On an
+  actual provider 429 whose body identifies token-per-day/TPD exhaustion, it
+  tries each configured `LLM_API_KEY` slot through `LLM_API_KEY_5` once in
+  order, without logging any credential. If every configured slot is exhausted,
+  the normal Celery retry policy resumes from slot 1 on the next task attempt.
+  This is deliberately bounded: it never spins forever inside a worker.
+- `ARTICLE_AGENT_API_KEY_SLOTS` selects the inspected range (default 5).
+  Separate key slots only improve availability when their provider quotas are
+  genuinely separate; shared organization TPD cannot be bypassed.
+- Generation, continuation, review, revision, final editing and supplemental
+  unit prompts now share concise Persian editorial instructions: idiomatic
+  Persian, meaningful paragraphs, non-template openings/transitions, direct
+  FAQ answers, useful conclusions and no fabricated evidence. The standard is
+  role-specific and small enough to preserve existing bounded context limits.
+
+### Long-form Celery execution window (2026-10-11)
+
+- Article generation now defaults to a six-hour soft limit and a six-hour,
+  fifteen-minute hard limit (`ARTICLE_AGENT_TASK_SOFT_TIME_LIMIT=21600`,
+  `ARTICLE_AGENT_TASK_TIME_LIMIT=22500`). This allows bounded long-form
+  writing, review/revision and legitimate provider wait periods to complete,
+  while retaining a hard stop for genuinely stuck work.
+- Workers read these settings at startup. Production deployment must restart
+  the `article_generation` Celery workers after updating environment values.

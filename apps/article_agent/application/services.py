@@ -16,6 +16,7 @@ from typing import Protocol
 from django.conf import settings
 
 from apps.article_agent.application.context_builder import ContextBuilder
+from apps.article_agent.application.persian_writing import writing_standard
 from apps.article_agent.application.word_budget import WordCounter
 from apps.article_agent.application.style import HumanStyleAnalyzer
 from apps.article_agent.domain import (
@@ -235,7 +236,8 @@ class SectionWriter:
                 "language. Continue naturally from the supplied bridge when present. Do not repeat the heading, "
                 "invent citations, mention AI, or add markdown/process commentary. Write approximately "
                 f"{target} semantic words; do not attempt the entire article or section in one response. "
-                "Use keywords naturally.\n\n"
+                "Use keywords naturally.\n"
+                f"{writing_standard(style.language, role='continuation' if continuation else 'draft')}\n\n"
                 f"{context}"
             )
             parts.append(
@@ -276,7 +278,8 @@ class SectionWriter:
         return (
             await self.llm.generate(
                 "Repair the entire section's length. Preserve facts and heading intent; do not return a short "
-                "summary or commentary. Return only complete section prose within the stated word range.\n\n"
+                "summary or commentary. Return only complete section prose within the stated word range.\n"
+                f"{writing_standard(style.language, role='revision')}\n\n"
                 + context,
                 operation="section_repair",
                 output_tokens=output_tokens,
@@ -332,6 +335,7 @@ class SectionReviewer:
             "You are reviewing one article section. Write a clear, professional critique in plain text.\n"
             "Focus on: relevance to the heading, completeness of the topic, factual concerns, "
             "repetition, usefulness for the reader, style consistency, and natural keyword use.\n\n"
+            f"{writing_standard(style.language, role='review')}\n\n"
             "IMPORTANT RULES:\n"
             "- Word count is advisory only. Never criticize length by itself.\n"
             "- Do NOT invent facts or cite sources that are not present.\n"
@@ -447,7 +451,8 @@ class RevisionService:
         )
         prompt = (
             "Revise only this section to address the listed review findings. Preserve correct details, "
-            "the requested heading intent, language and approximate word budget. Return only revised prose.\n\n"
+            "the requested heading intent, language and approximate word budget. Return only revised prose.\n"
+            f"{writing_standard(style.language, role='revision')}\n\n"
             + context
         )
         content = (
@@ -549,7 +554,8 @@ class ArticleReviewer:
             "If nothing important needs changing, write exactly:\n"
             "REQUIRED FIXES:\n- none\n\n"
             "Also mention which section units are affected using the form section:N when relevant.\n"
-            "Write only the critique. No JSON, no markdown code fences.\n\n"
+            "Write only the critique. No JSON, no markdown code fences.\n"
+            f"{writing_standard(plan.language, role='review')}\n\n"
             + context
         )
 
@@ -675,7 +681,8 @@ class FinalEditor:
                 ),
             )
             prompt = (
-                "Edit this section only when a listed issue applies. Preserve facts and heading intent. Return only prose.\n\n"
+                "Edit this section only when a listed issue applies. Preserve facts and heading intent. Return only prose.\n"
+                f"{writing_standard(style.language, role='revision')}\n\n"
                 + context
             )
             content = (
@@ -720,14 +727,15 @@ class SupplementWriter:
             ),
         )
         prompts = {
-            "conclusion": "Write a concise conclusion that synthesizes covered material only.",
+            "conclusion": "Write a concise conclusion that synthesizes covered material only. Do not mechanically recap headings.",
             "faq": "Write EXACTLY four useful FAQ entries as repeating `Question: ...\nAnswer: ...`; do not fabricate facts.",
-            "common_mistakes": "Write a concise practical common-mistakes section based only on covered material.",
-            "applications": "Write a concise practical applications section based only on covered material.",
+            "common_mistakes": "Write a concise practical common-mistakes section based only on covered material; explain why each mistake matters.",
+            "applications": "Write a concise practical applications section based only on covered material, including conditions or trade-offs where supported.",
         }
+        role = "conclusion" if kind == "conclusion" else "faq" if kind == "faq" else "draft"
         return (
             await self.llm.generate(
-                prompts[kind] + "\n\n" + context,
+                prompts[kind] + "\n" + writing_standard(plan.language, role=role) + "\n\n" + context,
                 operation="format",
                 output_tokens=_prose_output_tokens(allocation.maximum_words),
             )
@@ -763,7 +771,9 @@ class SupplementWriter:
                     f"Use at most {question_limit} words. "
                     "Return only the question as plain text. "
                     "No labels, numbering, JSON, or Markdown. "
-                    "Do not invent facts.\n\n" + context,
+                    "Do not invent facts.\n"
+                    + writing_standard(plan.language, role="faq")
+                    + "\n\n" + context,
                     operation="format",
                     output_tokens=256,
                 )
@@ -775,7 +785,8 @@ class SupplementWriter:
                     "by the provided context. "
                     f"Use at most {answer_limit} words. "
                     "Be concise and direct. Return only the answer as plain text. "
-                    "No JSON or Markdown. Do not invent facts.\n\n"
+                    "No JSON or Markdown. Do not invent facts.\n"
+                    + writing_standard(plan.language, role="faq") + "\n\n"
                     f"Question: {question}\n\n{context}",
                     operation="format",
                     output_tokens=256,
@@ -818,7 +829,12 @@ class SupplementWriter:
         )
         return (
             await self.llm.generate(
-                "Repair this article unit to the requested semantic word range. Preserve its required structure and facts. Return only the unit.\n\n"
+                "Repair this article unit to the requested semantic word range. Preserve its required structure and facts. Return only the unit.\n"
+                + writing_standard(
+                    plan.language,
+                    role="conclusion" if kind == "conclusion" else "revision",
+                )
+                + "\n\n"
                 + context,
                 operation="format",
                 output_tokens=_prose_output_tokens(allocation.maximum_words),
