@@ -8,6 +8,7 @@ from typing import Awaitable, Callable, Protocol
 from django.conf import settings
 
 from apps.article_agent.application.context_builder import ContextBuilder
+from apps.article_agent.application.content_quality import ContentSafetyValidator
 from apps.article_agent.application.memory import MemoryUpdater
 from apps.article_agent.application.planning import ArticlePlanner
 from apps.article_agent.application.word_budget import (
@@ -24,12 +25,22 @@ from apps.article_agent.application.services import (
     SectionWriter,
     SupplementWriter,
 )
+from apps.article_agent.application.seo_metadata import SeoMetadataService
+from apps.article_agent.application.specialist_review import (
+    SpecialistReviewCoordinator,
+    merge_specialist_findings,
+)
+from apps.article_agent.application.style import HumanStyleAnalyzer
 from apps.article_agent.domain import (
     ArticleBudget,
     ArticleMemory,
+    ArticlePlan,
+    ArticleReview,
     ArticleRequest,
     QualityReport,
+    ResearchData,
     ReviewResult,
+    ReviewIssue,
     SectionDraft,
     StyleProfile,
 )
@@ -71,6 +82,7 @@ class QualityGate:
         reviews_passed: bool,
         budget: ArticleBudget | None = None,
         article_review_passed: bool = True,
+        publication_warnings: list[str] | None = None,
     ) -> QualityReport:
         headings = [section.heading for section in sections]
         word_count = sum(
@@ -129,7 +141,7 @@ class QualityGate:
             actual_word_count=word_count,
             tolerance=self.tolerance,
             checks=checks,
-            warnings=critical_issues,
+            warnings=[*critical_issues, *(publication_warnings or [])],
             allocated_word_count=budget.total_words if budget else 0,
             unit_accounting=(
                 {}
@@ -172,6 +184,8 @@ class ArticlePipeline:
         article_reviewer: ArticleReviewer,
         final_editor: FinalEditor,
         supplement_writer: SupplementWriter,
+        specialist_reviewer: SpecialistReviewCoordinator | None = None,
+        metadata_service: SeoMetadataService | None = None,
         quality_gate: QualityGate,
         renderer: DocumentRenderer,
         context_builder: ContextBuilder,
@@ -194,6 +208,9 @@ class ArticlePipeline:
             article_reviewer,
             final_editor,
         )
+        self.specialist_reviewer, self.metadata_service = specialist_reviewer, metadata_service
+        self.content_safety = ContentSafetyValidator()
+        self.style_analyzer = HumanStyleAnalyzer()
         (
             self.supplement_writer,
             self.quality_gate,
@@ -234,6 +251,7 @@ class ArticlePipeline:
         )
         accepted: list[SectionDraft] = []
         reviews = []
+        publication_warnings: list[str] = []
         for section in plan.sections:
             await self._ensure_not_cancelled()
             if section.index in completed_sections:
@@ -267,9 +285,11 @@ class ArticlePipeline:
                 word_count=WordCounter.count_text(content),
             )
             review = await self._review_with_revisions(
-                plan, section, draft, memory, style, progress
+                plan, section, draft, memory, style, progress, research
             )
             draft, review = review
+            draft, safety_findings = self._sanitize_section(plan, draft, research)
+            publication_warnings.extend(self._warning_texts(safety_findings))
             revised_content = await budget_manager.repair_accepted(
                 f"section:{section.index}",
                 draft.content,
@@ -292,12 +312,20 @@ class ArticlePipeline:
                     "score": review.score,
                     "required_fixes": review.required_fixes,
                     "issues": [asdict(issue) for issue in review.issues],
+                    "specialist_opinions": [asdict(opinion) for opinion in review.specialist_opinions],
                 },
             )
             memory = self.memory_updater.update(memory, section, draft)
             await self.persist_memory(memory)
             accepted.append(draft)
             reviews.append(review)
+        accepted, contradiction_findings = self._content_safety().sanitize_contradictions(
+            plan, accepted, research
+        )
+        publication_warnings.extend(self._warning_texts(contradiction_findings))
+        if contradiction_findings:
+            for section in accepted:
+                await self.persist_section(section, {"publication_safety_sanitized": True})
         await self._ensure_not_cancelled()
         await self.update_stage(
             "writing",
@@ -364,7 +392,11 @@ class ArticlePipeline:
                     ),
                 ),
             }
-            await self.persist_checkpoint({"extras": payload})
+        payload, payload_safety_findings = self._sanitize_payload(plan, payload, research)
+        publication_warnings.extend(self._warning_texts(payload_safety_findings))
+        # Persist the sanitised checkpoint as well.  A retry must never revive
+        # the pre-sanitisation extras after a renderer or worker failure.
+        await self.persist_checkpoint({"extras": payload})
         await self.persist_plan(plan)
         await self._ensure_not_cancelled()
         await self.update_stage(
@@ -373,6 +405,16 @@ class ArticlePipeline:
         article_review = await self.article_reviewer.review(
             plan, memory, accepted, reviews, payload, research
         )
+        article_review = self._merge_article_findings(
+            article_review,
+            self.style_analyzer.review_findings(accepted, plan.keywords),
+        )
+        if self.specialist_reviewer:
+            await self.update_stage("final_review", 82, "Running specialist article reviews", len(plan.sections))
+            article_review = merge_specialist_findings(
+                article_review,
+                await self.specialist_reviewer.review_article(plan, memory, accepted, payload, research),
+            )
         await self.update_stage(
             "editing", 87, "Editing accepted sections", len(plan.sections)
         )
@@ -403,6 +445,17 @@ class ArticlePipeline:
             
             
             
+        edited, final_safety_findings = self._sanitize_sections(plan, edited, research)
+        publication_warnings.extend(self._warning_texts(final_safety_findings))
+        sanitized_indexes = {
+            section.section_index
+            for section, prior in zip(edited, accepted, strict=True)
+            if section.content != prior.content
+        }
+        for section in edited:
+            if section.section_index in sanitized_indexes:
+                await self.persist_section(section, {"publication_safety_sanitized": True})
+        edited_indexes = sorted(set(edited_indexes) | sanitized_indexes)
         for index in edited_indexes:
             section = edited[index]
 
@@ -413,6 +466,7 @@ class ArticlePipeline:
                 memory,
                 style,
                 90,
+                research,
             )
 
             # بررسی نهایی باید روی همان متنی انجام شود که ذخیره می‌شود.
@@ -430,6 +484,7 @@ class ArticlePipeline:
                     "score": review.score,
                     "required_fixes": review.required_fixes,
                     "issues": [asdict(issue) for issue in review.issues],
+                    "specialist_opinions": [asdict(opinion) for opinion in review.specialist_opinions],
                 },
             )
 
@@ -451,6 +506,21 @@ class ArticlePipeline:
                     review.required_fixes,
                 )
 
+        # A final targeted revision is another provider call and can itself
+        # introduce a new unsupported claim.  Run the deterministic fallback
+        # once more on exactly those persisted units before article review and
+        # rendering; no additional whole-article context is introduced.
+        edited, post_review_safety_findings = self._sanitize_sections(
+            plan, edited, research
+        )
+        publication_warnings.extend(self._warning_texts(post_review_safety_findings))
+        for section in edited:
+            if any(
+                f"section:{section.section_index}" in finding.affected_units
+                for finding in post_review_safety_findings
+            ):
+                await self.persist_section(section, {"publication_safety_sanitized": True})
+
         
         
         
@@ -471,6 +541,11 @@ class ArticlePipeline:
             final_article_review = await self.article_reviewer.review(
                 plan, memory, edited, post_edit_reviews, payload, research
             )
+            if self.specialist_reviewer:
+                final_article_review = merge_specialist_findings(
+                    final_article_review,
+                    await self.specialist_reviewer.review_article(plan, memory, edited, payload, research),
+                )
         await self._ensure_not_cancelled()
         await self.update_stage(
             "quality_check", 93, "Running quality checks", len(plan.sections)
@@ -489,6 +564,7 @@ class ArticlePipeline:
             True,
             plan.budget,
             final_article_review.passed,
+            publication_warnings,
         )
 
 
@@ -536,23 +612,34 @@ class ArticlePipeline:
 
 
 
-        await self.update_stage("rendering", 97, "Rendering DOCX", len(plan.sections))
         article = {
             "title": request.title,
+            "brand_name": request.brand_name,
             "sections": [
                 {"heading": section.heading, "content": section.content}
                 for section in edited
             ],
             **payload,
+            "specialist_reviews": [
+                asdict(opinion) for opinion in final_article_review.specialist_opinions
+            ],
+            "content_warnings": report.warnings,
         }
+        if self.metadata_service:
+            await self.update_stage("rendering", 96, "Generating SEO metadata", len(plan.sections))
+            article["seo_metadata"] = await self.metadata_service.generate(
+                plan, edited, final_article_review.specialist_opinions
+            )
+        await self.update_stage("rendering", 97, "Rendering DOCX", len(plan.sections))
         document = self.renderer.generate(article)
         return PipelineResult(
             article=article, document=document.getvalue(), quality_report=report
         )
 
     async def _review_with_revisions(
-        self, plan, section, draft, memory, style, progress
+        self, plan, section, draft, memory, style, progress, research=None
     ):
+        research = research or ResearchData()
         review = None
         for attempt in range(settings.ARTICLE_AGENT_MAX_SECTION_REVISIONS + 1):
             await self._ensure_not_cancelled()
@@ -564,6 +651,17 @@ class ArticlePipeline:
             )
             try:
                 review = await self.reviewer.review(plan, section, draft, memory, style)
+                if getattr(self, "specialist_reviewer", None):
+                    review = merge_specialist_findings(
+                        review,
+                        await self.specialist_reviewer.review_section(
+                            plan, section, draft, memory, style, research
+                        ),
+                    )
+                review = self._merge_section_findings(
+                    review,
+                    self._content_safety().inspect_section(plan, draft, research),
+                )
             except ValueError as exc:
                 import logging
 
@@ -595,6 +693,116 @@ class ArticlePipeline:
                 plan, section, draft, review, memory, style
             )
         raise AssertionError("unreachable")
+
+    def _sanitize_section(
+        self, plan: ArticlePlan, draft: SectionDraft, research: ResearchData
+    ) -> tuple[SectionDraft, list[ReviewIssue]]:
+        content, findings = self._content_safety().sanitize_text(
+            plan, draft.content, research, unit_id=f"section:{draft.section_index}"
+        )
+        if content == draft.content:
+            return draft, findings
+        return (
+            SectionDraft(
+                draft.section_index, draft.heading, content,
+                word_count=WordCounter.count_text(content),
+                revision_number=draft.revision_number,
+            ),
+            findings,
+        )
+
+    def _sanitize_sections(
+        self, plan: ArticlePlan, sections: list[SectionDraft], research: ResearchData
+    ) -> tuple[list[SectionDraft], list[ReviewIssue]]:
+        sanitized: list[SectionDraft] = []
+        findings: list[ReviewIssue] = []
+        for section in sections:
+            safe_section, section_findings = self._sanitize_section(plan, section, research)
+            sanitized.append(safe_section)
+            findings.extend(section_findings)
+        return sanitized, findings
+
+    def _sanitize_payload(
+        self, plan: ArticlePlan, payload: dict, research: ResearchData
+    ) -> tuple[dict, list[ReviewIssue]]:
+        safe_payload = dict(payload)
+        findings: list[ReviewIssue] = []
+        for key in ("conclusion", "common_mistakes", "applications"):
+            content, item_findings = self._content_safety().sanitize_text(
+                plan, str(safe_payload.get(key, "")), research, unit_id=key
+            )
+            safe_payload[key] = content
+            findings.extend(item_findings)
+        safe_faq: list[dict] = []
+        for index, entry in enumerate(safe_payload.get("FAQ", [])):
+            if not isinstance(entry, dict):
+                safe_faq.append(entry)
+                continue
+            safe_entry = dict(entry)
+            for field in ("question", "answer"):
+                content, item_findings = self._content_safety().sanitize_text(
+                    plan, str(safe_entry.get(field, "")), research,
+                    unit_id=f"faq:{index}",
+                )
+                safe_entry[field] = content
+                findings.extend(item_findings)
+            safe_faq.append(safe_entry)
+        safe_payload["FAQ"] = safe_faq
+        return safe_payload, findings
+
+    def _content_safety(self) -> ContentSafetyValidator:
+        """Return the validator even for narrow legacy/recovery construction.
+
+        Production construction installs it eagerly.  The lazy fallback keeps
+        isolated recovery tests and any diagnostic construction of the
+        pipeline compatible without weakening the normal production path.
+        """
+        validator = getattr(self, "content_safety", None)
+        if validator is None:
+            validator = ContentSafetyValidator()
+            self.content_safety = validator
+        return validator
+
+    @staticmethod
+    def _merge_section_findings(
+        review: ReviewResult, findings: list[ReviewIssue]
+    ) -> ReviewResult:
+        existing = {(issue.type, issue.description.casefold()) for issue in review.issues}
+        for finding in findings:
+            key = (finding.type, finding.description.casefold())
+            if key in existing:
+                continue
+            existing.add(key)
+            review.issues.append(finding)
+            if finding.recommendation not in review.required_fixes:
+                review.required_fixes.append(finding.recommendation)
+            review.passed = False
+            review.score = min(review.score, 5.0)
+        return review
+
+    @staticmethod
+    def _merge_article_findings(
+        review: ArticleReview, findings: list[ReviewIssue]
+    ) -> ArticleReview:
+        existing = {(issue.type, issue.description.casefold()) for issue in review.findings}
+        for finding in findings:
+            key = (finding.type, finding.description.casefold())
+            if key in existing:
+                continue
+            existing.add(key)
+            review.findings.append(finding)
+            if finding.recommendation not in review.required_fixes:
+                review.required_fixes.append(finding.recommendation)
+            review.passed = False
+            review.score = min(review.score, 6.0)
+        return review
+
+    @staticmethod
+    def _warning_texts(findings: list[ReviewIssue]) -> list[str]:
+        return [
+            f"{finding.type}: {finding.description[:400]}"
+            for finding in findings
+        ]
 
     async def _ensure_not_cancelled(self) -> None:
         if await self.cancelled():

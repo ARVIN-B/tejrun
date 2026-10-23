@@ -192,6 +192,7 @@ class ContextBuilder:
             "keywords": plan.keywords,
             "section_outline": [section.heading for section in plan.sections],
             "global_constraints": plan.global_constraints,
+            "brand_name": plan.brand_name,
         }
 
     @staticmethod

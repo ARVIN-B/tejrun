@@ -32,12 +32,18 @@ class ArticlePlanner:
                 index=index,
                 heading=heading,
                 purpose=self._section_purpose(index, len(request.headings), heading),
-                key_points=[f"Explain the role of {heading} in relation to {request.title}."],
+                key_points=[
+                    f"Explain the role of {heading} in relation to {request.title}.",
+                    self._distinct_scope(heading),
+                ],
                 target_words=allocation.target_words,
                 minimum_words=allocation.minimum_words,
                 maximum_words=allocation.maximum_words,
                 must_include=[heading],
-                must_avoid=["Repeat already covered concepts without adding new value."],
+                must_avoid=[
+                    "Repeat already covered concepts without adding new value.",
+                    *self._scope_avoidances(heading),
+                ],
                 dependencies=[index - 1] if index else [],
                 research_requirements=[],
                 keywords=request.keywords,
@@ -61,6 +67,7 @@ class ArticlePlanner:
                 "Do not fabricate sources or statistics.",
             ],
             coverage_requirements=request.headings,
+            brand_name=request.brand_name,
         )
 
     def _create_budget(self, request: ArticleRequest) -> ArticleBudget:
@@ -106,3 +113,29 @@ class ArticlePlanner:
         if index == section_count - 1:
             return f"Complete the planned coverage through {heading} without generic repetition."
         return f"Develop a distinct, useful aspect of the article through {heading}."
+
+    @staticmethod
+    def _distinct_scope(heading: str) -> str:
+        normalized = heading.casefold()
+        if any(term in normalized for term in ("چیست", "تعریف", "مفهوم", "what is", "definition")):
+            return "Define the concept, its boundaries, and why the distinction matters; do not turn this section into a checklist."
+        if any(term in normalized for term in ("شرایط", "صلاحیت", "eligibility", "conditions")):
+            return "Explain eligibility and decision conditions only; keep document lists and step-by-step procedure for their own headings."
+        if any(term in normalized for term in ("مدارک", "اسناد", "documents", "requirements")):
+            return "Explain the purpose of each document or evidence item; do not repeat the full eligibility rules or process sequence."
+        if any(term in normalized for term in ("مراحل", "فرآیند", "ثبت نام", "ثبت‌نام", "steps", "process")):
+            return "Explain the order of practical actions and checkpoints; do not repeat the full document checklist."
+        return "Add a distinct reader decision or explanation that other headings do not already cover."
+
+    @staticmethod
+    def _scope_avoidances(heading: str) -> list[str]:
+        normalized = heading.casefold()
+        if any(term in normalized for term in ("چیست", "تعریف", "مفهوم", "what is", "definition")):
+            return ["Do not repeat document lists or procedural steps here."]
+        if any(term in normalized for term in ("شرایط", "صلاحیت", "eligibility", "conditions")):
+            return ["Do not duplicate the document checklist or registration sequence here."]
+        if any(term in normalized for term in ("مدارک", "اسناد", "documents", "requirements")):
+            return ["Do not duplicate general conditions or the registration sequence here."]
+        if any(term in normalized for term in ("مراحل", "فرآیند", "ثبت نام", "ثبت‌نام", "steps", "process")):
+            return ["Do not duplicate the full eligibility or document checklist here."]
+        return []

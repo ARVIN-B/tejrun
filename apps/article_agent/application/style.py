@@ -7,6 +7,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 
 from apps.article_agent.application.word_budget import WordCounter
+from apps.article_agent.domain import ReviewIssue, SectionDraft
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,3 +60,95 @@ class HumanStyleAnalyzer:
             repeated_structure_count=sum(count - 1 for count in Counter(item.split(":", 1)[0] for item in paragraphs if ":" in item).values() if count > 1),
             meta_language_count=sum(normalized.count(phrase) for phrase in self.meta_language),
         )
+
+    def review_findings(
+        self, sections: list[SectionDraft], keywords: list[str]
+    ) -> list[ReviewIssue]:
+        """Create bounded, actionable editorial findings from deterministic signals.
+
+        The thresholds are deliberately conservative.  They flag visible
+        template language and keyword stuffing rather than treating ordinary
+        grammar, clean formatting, or document metadata as authorship signals.
+        """
+        findings: list[ReviewIssue] = []
+        for section in sections:
+            metrics = self.analyze(section.content, keywords)
+            unit_id = f"section:{section.section_index}"
+            if metrics.generic_opening_count:
+                findings.append(ReviewIssue(
+                    type="generic_opening", severity="medium",
+                    description="The section starts with a generic template opening.",
+                    affected_units=[unit_id],
+                    recommendation="Open with the specific decision, condition, or distinction addressed by this heading.",
+                ))
+            if metrics.template_phrase_score >= 0.08:
+                findings.append(ReviewIssue(
+                    type="template_language", severity="medium",
+                    description="The section uses repeated template-style connective language.",
+                    affected_units=[unit_id],
+                    recommendation="Replace template transitions with a direct connection between the surrounding ideas.",
+                ))
+            if metrics.generic_transition_count > 2:
+                findings.append(ReviewIssue(
+                    type="generic_transitions", severity="medium",
+                    description="The section repeatedly uses generic transition phrases.",
+                    affected_units=[unit_id],
+                    recommendation="Keep only transitions that express a real logical relationship and write the rest directly.",
+                ))
+            if (
+                metrics.repeated_phrase_count >= 2
+                or metrics.repeated_sentence_pattern_count >= 2
+                or metrics.repeated_structure_count >= 2
+            ):
+                findings.append(ReviewIssue(
+                    type="repetitive_structure", severity="medium",
+                    description="The section repeats a phrase or sentence/list structure enough to sound mechanical.",
+                    affected_units=[unit_id],
+                    recommendation="Keep the strongest occurrence and replace the repeated structure with a distinct explanation, condition, or example already supported by the context.",
+                ))
+            if metrics.keyword_stuffing_score > 0.045:
+                findings.append(ReviewIssue(
+                    type="keyword_stuffing", severity="medium",
+                    description="Keyword density is high enough to reduce natural readability.",
+                    affected_units=[unit_id],
+                    recommendation="Keep the keyword where it clarifies meaning and replace repeated occurrences with precise natural references.",
+                ))
+            if metrics.meta_language_count:
+                findings.append(ReviewIssue(
+                    type="process_language", severity="high",
+                    description="The section exposes model or prompt process language.",
+                    affected_units=[unit_id],
+                    recommendation="Remove all model, prompt, or generation-process references from reader-facing prose.",
+                ))
+        findings.extend(self._cross_section_repetition_findings(sections))
+        return findings
+
+    @staticmethod
+    def _cross_section_repetition_findings(
+        sections: list[SectionDraft],
+    ) -> list[ReviewIssue]:
+        """Catch exact repeated long phrases across headings without semantic guessing."""
+        seen: dict[str, int] = {}
+        repeated_pairs: set[tuple[int, int]] = set()
+        for section in sections:
+            words = WordCounter.normalize(section.content).casefold().split()
+            phrases = {
+                " ".join(words[index:index + 8])
+                for index in range(max(0, len(words) - 7))
+            }
+            for phrase in phrases:
+                prior_index = seen.get(phrase)
+                if prior_index is not None and prior_index != section.section_index:
+                    repeated_pairs.add(tuple(sorted((prior_index, section.section_index))))
+                else:
+                    seen[phrase] = section.section_index
+        return [
+            ReviewIssue(
+                type="cross_section_repetition",
+                severity="medium",
+                description="Two headings contain the same long phrase, which risks duplicated coverage.",
+                affected_units=[f"section:{left}", f"section:{right}"],
+                recommendation="Keep the explanation under the heading where it belongs and replace the duplicate with a distinct point for the other heading.",
+            )
+            for left, right in sorted(repeated_pairs)
+        ]

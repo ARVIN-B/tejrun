@@ -55,6 +55,7 @@ class ArticleRequest:
     audience: str = DEFAULT_AUDIENCE
     tone: str = DEFAULT_TONE
     purpose: str = "inform"
+    brand_name: str = ""
 
     def __post_init__(self) -> None:
         self.title = _non_empty(self.title, "title")
@@ -68,6 +69,9 @@ class ArticleRequest:
         self.audience = _non_empty(self.audience, "audience")
         self.tone = _non_empty(self.tone, "tone")
         self.purpose = _non_empty(self.purpose, "purpose")
+        self.brand_name = " ".join(self.brand_name.split())
+        if len(self.brand_name) > 160:
+            raise ValueError("brand_name must be 160 characters or fewer.")
 
 
 @dataclass(slots=True)
@@ -185,6 +189,7 @@ class ArticlePlan:
     global_constraints: list[str] = field(default_factory=list)
     seo_intent: str = "informational"
     coverage_requirements: list[str] = field(default_factory=list)
+    brand_name: str = ""
 
     def __post_init__(self) -> None:
         self.title = _non_empty(self.title, "title")
@@ -214,6 +219,9 @@ class ArticlePlan:
         self.global_constraints = _unique_strings(self.global_constraints)
         self.coverage_requirements = _unique_strings(self.coverage_requirements)
         self.seo_intent = _non_empty(self.seo_intent, "seo_intent")
+        self.brand_name = " ".join(self.brand_name.split())
+        if len(self.brand_name) > 160:
+            raise ValueError("brand_name must be 160 characters or fewer.")
 
 
 @dataclass(slots=True)
@@ -338,6 +346,7 @@ class ReviewResult:
     issues: list[ReviewIssue] = field(default_factory=list)
     strengths: list[str] = field(default_factory=list)
     required_fixes: list[str] = field(default_factory=list)
+    specialist_opinions: list["SpecialistOpinion"] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not 0 <= self.score <= 10:
@@ -353,6 +362,7 @@ class ArticleReview:
     findings: list[ReviewIssue] = field(default_factory=list)
     section_scores: dict[int, float] = field(default_factory=dict)
     required_fixes: list[str] = field(default_factory=list)
+    specialist_opinions: list["SpecialistOpinion"] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not 0 <= self.score <= 10:
@@ -389,6 +399,39 @@ class QualityReport:
     @property
     def word_delta(self) -> int:
         return self.actual_word_count - self.target_word_count
+
+
+SpecialistRole = Literal[
+    "seo", "persian_editor", "article_writer", "industrial_electrical", "solar"
+]
+SpecialistScope = Literal["section", "article"]
+
+
+@dataclass(slots=True)
+class SpecialistOpinion:
+    """A bounded, validated advisory opinion from one review persona."""
+
+    role: SpecialistRole
+    scope: SpecialistScope
+    applicable: bool
+    score: float
+    findings: list[ReviewIssue] = field(default_factory=list)
+    strengths: list[str] = field(default_factory=list)
+    required_fixes: list[str] = field(default_factory=list)
+    reason: str = ""
+
+    def __post_init__(self) -> None:
+        if self.role not in {"seo", "persian_editor", "article_writer", "industrial_electrical", "solar"}:
+            raise ValueError("specialist role is invalid.")
+        if self.scope not in {"section", "article"}:
+            raise ValueError("specialist scope is invalid.")
+        if not isinstance(self.applicable, bool):
+            raise ValueError("specialist applicable must be a boolean.")
+        if not 0 <= self.score <= 10:
+            raise ValueError("specialist score must be between zero and ten.")
+        self.strengths = _unique_strings(self.strengths)
+        self.required_fixes = _unique_strings(self.required_fixes)
+        self.reason = self.reason.strip()[:500]
 
 
 @dataclass(slots=True)

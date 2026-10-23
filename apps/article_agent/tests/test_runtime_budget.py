@@ -31,16 +31,16 @@ class BudgetManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manager.budget.reserved_words, 0)
         self.assertEqual(manager.budget.allocation_for("section:0").status, "accepted")
 
-    async def test_impossible_output_is_rejected_without_consumption(self) -> None:
+    async def test_impossible_output_is_accepted_after_bounded_repairs(self) -> None:
         manager = BudgetManager(budget(), max_repairs=1)
 
         async def generate(): return "short"
         async def repair(_output, _allocation): return "still short"
 
-        with self.assertRaisesRegex(BudgetError, "unit_budget_unsatisfied"):
-            await manager.generate_and_accept("section:0", generate, repair)
-        self.assertEqual(manager.budget.consumed_words, 0)
-        self.assertEqual(manager.budget.allocation_for("section:0").status, "planned")
+        accepted = await manager.generate_and_accept("section:0", generate, repair)
+        self.assertEqual(accepted, "still short")
+        self.assertEqual(manager.budget.consumed_words, 2)
+        self.assertEqual(manager.budget.allocation_for("section:0").status, "accepted")
 
     async def test_configured_repair_budget_can_recover_after_three_short_responses(self) -> None:
         """A provider that initially truncates output must get all bounded repairs."""
@@ -62,23 +62,23 @@ class BudgetManagerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(WordCounter.count_text(accepted), 45)
         self.assertEqual(manager.budget.allocation_for("section:0").status, "accepted")
 
-    def test_reserve_rejects_state_that_would_starve_remaining_units(self) -> None:
+    def test_reserve_allows_best_effort_continuation_after_prior_overrun(self) -> None:
         plan = budget()
         plan.consumed_words = 50
-        with self.assertRaisesRegex(BudgetError, "remaining_budget_cannot_cover_required_units"):
-            BudgetManager(plan).reserve("section:0")
+        allocation = BudgetManager(plan).reserve("section:0")
+        self.assertEqual(allocation.status, "reserved")
 
-    def test_accept_rejects_output_that_starves_remaining_units(self) -> None:
+    def test_accepts_overlong_output_without_failing_article(self) -> None:
         manager = BudgetManager(budget())
         manager.reserve("section:0")
-        with self.assertRaisesRegex(BudgetError, "violates its word allocation"):
-            manager.accept("section:0", 81)
+        manager.accept("section:0", 81)
+        self.assertEqual(manager.budget.allocation_for("section:0").generated_words, 81)
 
-    def test_revision_revalidates_the_accepted_unit_budget(self) -> None:
+    def test_revision_keeps_outside_range_prose_when_repair_is_not_possible(self) -> None:
         manager = BudgetManager(budget())
         manager.restore_accepted("section:0", 50)
-        with self.assertRaisesRegex(BudgetError, "revision violates"):
-            manager.replace_accepted("section:0", 10)
+        manager.replace_accepted("section:0", 10)
+        self.assertEqual(manager.budget.allocation_for("section:0").generated_words, 10)
 
     async def test_out_of_budget_revision_is_repaired_before_replacement(self) -> None:
         manager = BudgetManager(budget(), max_repairs=1)

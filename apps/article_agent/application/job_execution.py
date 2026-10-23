@@ -19,6 +19,8 @@ from apps.article_agent.application.services import (
     ArticleReviewer, FinalEditor, GroundingResearcher, RevisionService,
     SectionReviewer, SectionWriter, SupplementWriter,
 )
+from apps.article_agent.application.seo_metadata import SeoMetadataService
+from apps.article_agent.application.specialist_review import SpecialistReviewCoordinator
 from apps.article_agent.domain import ArticleMemory, ArticleRequest, SectionDraft
 from apps.article_agent.domain.serialization import article_plan_to_dict, quality_report_to_dict
 from apps.article_agent.infrastructure.ai.groq_client import GroqClient
@@ -42,7 +44,7 @@ class ArticleJobExecutionService:
         article = job.article
         request = ArticleRequest(
             title=article.title, word_count=article.word_count, headings=article.headings,
-            keywords=article.keywords, language=article.language,
+            keywords=article.keywords, language=article.language, brand_name=article.brand_name,
         )
         memory = ArticleMemory(**{
             key: value for key, value in job.memory_payload.items()
@@ -66,7 +68,9 @@ class ArticleJobExecutionService:
                 writer=SectionWriter(llm, context_builder), reviewer=SectionReviewer(llm, context_builder),
                 reviser=RevisionService(llm, context_builder), memory_updater=MemoryUpdater(),
                 article_reviewer=ArticleReviewer(llm, context_builder), final_editor=FinalEditor(llm, context_builder),
-                supplement_writer=SupplementWriter(llm, context_builder), quality_gate=QualityGate(),
+                supplement_writer=SupplementWriter(llm, context_builder),
+                specialist_reviewer=SpecialistReviewCoordinator(llm, context_builder),
+                metadata_service=SeoMetadataService(llm, context_builder), quality_gate=QualityGate(),
                 renderer=DocxGenerator(), context_builder=context_builder,
                 update_stage=lambda status, progress, stage, section: self._update_stage(job_id, execution_version, status, progress, stage, section),
                 persist_plan=lambda plan: self._persist_plan(job_id, execution_version, plan),

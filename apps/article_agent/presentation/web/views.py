@@ -47,16 +47,19 @@ def create_article_view(request):
 @login_required
 def create_article_job(request):
     title = request.POST.get("title", "").strip()
+    brand_name = " ".join(request.POST.get("brand_name", "").split())
     headings = [" ".join(value.split()) for value in request.POST.getlist("headings") if value.strip()]
     keywords = _keywords(request.POST.get("keywords", ""))
     try: word_count = int(request.POST.get("word_count", ""))
     except ValueError: return JsonResponse({"success": False, "error": "Word count must be a number."}, status=400)
     if not title or len(title) > 255 or not headings or len(headings) > settings.ARTICLE_AGENT_MAX_HEADINGS or any(len(heading) > settings.ARTICLE_AGENT_MAX_HEADING_LENGTH for heading in headings) or len({heading.casefold() for heading in headings}) != len(headings) or not 100 <= word_count <= settings.ARTICLE_AGENT_MAX_WORD_COUNT:
         return JsonResponse({"success": False, "error": "Provide valid article details."}, status=400)
+    if len(brand_name) > 160:
+        return JsonResponse({"success": False, "error": "Brand name must be 160 characters or fewer."}, status=400)
     if len(keywords) > settings.ARTICLE_AGENT_MAX_KEYWORDS or any(len(item) > settings.ARTICLE_AGENT_MAX_KEYWORD_LENGTH for item in keywords):
         return JsonResponse({"success": False, "error": "Too many or overly long keywords."}, status=400)
-    article = Article.objects.create(owner=request.user, title=title, word_count=word_count, headings=headings, keywords=keywords)
-    job = ArticleJob.objects.create(article=article, total_sections=len(headings), request_payload={"title": title, "word_count": word_count, "headings": headings, "keywords": keywords})
+    article = Article.objects.create(owner=request.user, title=title, word_count=word_count, headings=headings, keywords=keywords, brand_name=brand_name)
+    job = ArticleJob.objects.create(article=article, total_sections=len(headings), request_payload={"title": title, "brand_name": brand_name, "word_count": word_count, "headings": headings, "keywords": keywords})
     _enqueue_article_job(job.pk, job.execution_version)
     return JsonResponse({"success": True, "job_id": job.pk, "status": job.status}, status=201)
 
@@ -65,7 +68,8 @@ def create_article_job(request):
 @login_required
 def job_status(request, job_id):
     job = _owned(request, job_id)
-    return JsonResponse({"id": job.pk, "title": job.article.title, "keywords": job.article.keywords, "word_count": job.article.word_count, "status": job.status, "progress": job.progress, "current_stage": job.current_stage, "current_section": job.current_section, "total_sections": job.total_sections, "error_message": job.error_message, "created_at": job.created_at.isoformat(), "updated_at": job.updated_at.isoformat(), "download_available": job.status == JobStatus.COMPLETED and bool(job.output_file)})
+    article_result = job.result_payload.get("article", {}) if isinstance(job.result_payload, dict) else {}
+    return JsonResponse({"id": job.pk, "title": job.article.title, "brand_name": job.article.brand_name, "keywords": job.article.keywords, "word_count": job.article.word_count, "seo_metadata": article_result.get("seo_metadata", {}), "specialist_reviews": article_result.get("specialist_reviews", []), "content_warnings": article_result.get("content_warnings", []), "status": job.status, "progress": job.progress, "current_stage": job.current_stage, "current_section": job.current_section, "total_sections": job.total_sections, "error_message": job.error_message, "created_at": job.created_at.isoformat(), "updated_at": job.updated_at.isoformat(), "download_available": job.status == JobStatus.COMPLETED and bool(job.output_file)})
 
 
 @require_POST

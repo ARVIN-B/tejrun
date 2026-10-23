@@ -60,6 +60,7 @@ class Article(models.Model):
     word_count = models.PositiveIntegerField()
     headings = models.JSONField(default=list)
     keywords = models.JSONField(default=list)
+    brand_name = models.CharField(max_length=160, blank=True, default="")
     language = models.CharField(max_length=16, default="fa")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

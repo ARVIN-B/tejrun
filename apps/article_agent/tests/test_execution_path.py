@@ -2,6 +2,7 @@ import tempfile
 from io import BytesIO
 from unittest.mock import ANY, AsyncMock, patch
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from celery.exceptions import Retry
 from django.contrib.auth import get_user_model
 from django.test import TransactionTestCase, override_settings
@@ -38,6 +39,8 @@ class ExecutionPathTests(TransactionTestCase):
 
         self.job.refresh_from_db()
         pipeline.run.assert_awaited_once()
+        self.assertIsNotNone(pipeline_class.call_args.kwargs["specialist_reviewer"])
+        self.assertIsNotNone(pipeline_class.call_args.kwargs["metadata_service"])
         self.assertEqual(self.job.status, JobStatus.COMPLETED)
         self.assertTrue(self.job.output_file.name)
 
@@ -63,6 +66,54 @@ class ExecutionPathTests(TransactionTestCase):
         execute.assert_called_once_with(self.job.pk, task_id="retry-contract-task")
         self.assertEqual(retry.call_args.args, ())
         self.assertIn("countdown", retry.call_args.kwargs)
+
+    @override_settings(
+        ARTICLE_AGENT_SOFT_TIME_LIMIT_MAX_RETRIES=2,
+        ARTICLE_AGENT_SOFT_TIME_LIMIT_RETRY_DELAY_SECONDS=17,
+    )
+    @patch("apps.article_agent.tasks.generate_article_task.retry", side_effect=Retry())
+    @patch(
+        "apps.article_agent.tasks.ArticleJobExecutionService.execute",
+        side_effect=SoftTimeLimitExceeded(),
+    )
+    def test_soft_time_limit_requeues_job_for_checkpoint_resume(self, execute, retry) -> None:
+        self.job.celery_task_id = "soft-timeout-task"
+        self.job.save(update_fields=["celery_task_id"])
+
+        generate_article_task.apply(args=(self.job.pk,), task_id="soft-timeout-task")
+
+        execute.assert_called_once_with(self.job.pk, task_id="soft-timeout-task")
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.status, JobStatus.QUEUED)
+        self.assertEqual(
+            self.job.current_stage,
+            "Time limit reached; resuming from checkpoint",
+        )
+        self.assertEqual(self.job.retry_count, 1)
+        self.assertEqual(retry.call_args.args, ())
+        self.assertEqual(retry.call_args.kwargs["countdown"], 17)
+        self.assertEqual(retry.call_args.kwargs["max_retries"], 2)
+
+    @override_settings(ARTICLE_AGENT_SOFT_TIME_LIMIT_MAX_RETRIES=2)
+    @patch(
+        "apps.article_agent.tasks.ArticleJobExecutionService.execute",
+        side_effect=SoftTimeLimitExceeded(),
+    )
+    def test_exhausted_soft_time_limit_retries_record_an_actionable_failure(self, execute) -> None:
+        self.job.celery_task_id = "soft-timeout-exhausted-task"
+        self.job.save(update_fields=["celery_task_id"])
+
+        generate_article_task.apply(
+            args=(self.job.pk,),
+            task_id="soft-timeout-exhausted-task",
+            retries=2,
+        )
+
+        execute.assert_called_once_with(self.job.pk, task_id="soft-timeout-exhausted-task")
+        self.job.refresh_from_db()
+        self.assertEqual(self.job.status, JobStatus.FAILED)
+        self.assertEqual(self.job.error_code, "soft_time_limit_exhausted")
+        self.assertIn("86400 seconds", self.job.error_message)
 
     @patch("apps.article_agent.application.job_execution.GroqClient")
     @patch("apps.article_agent.application.job_execution.ArticlePipeline")

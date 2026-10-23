@@ -27,6 +27,29 @@ class ArticleJobEndpointTests(TestCase):
         apply_async.assert_called_once_with(args=[job.pk], task_id=job.celery_task_id, queue="article_generation")
         self.assertTrue(job.celery_task_id)
 
+    @patch("apps.article_agent.presentation.web.views.generate_article_task.apply_async")
+    def test_create_job_persists_normalized_optional_brand_name(self, apply_async) -> None:
+        response = self.client.post(
+            reverse("article_job_create"),
+            {"title": "Brand", "brand_name": "  انرژی   نو  ", "word_count": 1200,
+             "headings": ["Introduction"], "keywords": "energy"},
+        )
+        self.assertEqual(response.status_code, 201)
+        job = ArticleJob.objects.get()
+        self.assertEqual(job.article.brand_name, "انرژی نو")
+        self.assertEqual(job.request_payload["brand_name"], "انرژی نو")
+
+    @patch("apps.article_agent.presentation.web.views.generate_article_task.apply_async")
+    def test_create_job_rejects_overlong_brand_name(self, apply_async) -> None:
+        response = self.client.post(
+            reverse("article_job_create"),
+            {"title": "Brand", "brand_name": "x" * 161, "word_count": 1200,
+             "headings": ["Introduction"], "keywords": ""},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Brand name", response.json()["error"])
+        apply_async.assert_not_called()
+
     def test_other_user_cannot_read_or_download_job(self) -> None:
         article = Article.objects.create(owner=self.user, title="Private", word_count=1000, headings=["One"], keywords=[])
         job = ArticleJob.objects.create(article=article)
@@ -51,6 +74,20 @@ class ArticleJobEndpointTests(TestCase):
         self.assertContains(response, 'aria-live="polite"')
         self.assertContains(response, 'name="headings_text"')
         self.assertContains(response, 'setInterval(poll,3000)')
+        self.assertContains(response, 'name="brand_name"')
+
+    def test_job_status_exposes_brand_metadata_and_specialist_review_summary(self) -> None:
+        article = Article.objects.create(owner=self.user, title="Status", word_count=1000, headings=["One"], keywords=[], brand_name="Brand")
+        job = ArticleJob.objects.create(
+            article=article,
+            result_payload={"article": {"seo_metadata": {"meta_title": "Title", "meta_description": "Description"}, "specialist_reviews": [{"role": "seo"}], "content_warnings": ["unsupported_operational_claim: sanitized"]}},
+        )
+        response = self.client.get(reverse("article_job_status", args=[job.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["brand_name"], "Brand")
+        self.assertEqual(response.json()["seo_metadata"]["meta_title"], "Title")
+        self.assertEqual(response.json()["specialist_reviews"], [{"role": "seo"}])
+        self.assertEqual(response.json()["content_warnings"], ["unsupported_operational_claim: sanitized"])
 
     @patch("apps.article_agent.presentation.web.views.generate_article_task.apply_async")
     def test_failed_job_can_be_retried_but_completed_job_cannot(self, apply_async) -> None:

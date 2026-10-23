@@ -14,6 +14,7 @@ from .contracts import (
     ReviewResult,
     SectionDraft,
     SectionPlan,
+    SpecialistOpinion,
     StyleProfile,
 )
 
@@ -31,5 +32,6 @@ __all__ = [
     "ReviewResult",
     "SectionDraft",
     "SectionPlan",
+    "SpecialistOpinion",
     "StyleProfile",
 ]

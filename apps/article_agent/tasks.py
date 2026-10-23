@@ -2,6 +2,7 @@ import logging
 import random
 import re
 
+from billiard.exceptions import SoftTimeLimitExceeded
 from celery import shared_task
 from django.conf import settings
 from django.utils import timezone
@@ -65,7 +66,10 @@ def _retry_delay(error: Exception, retry_number: int) -> int:
         # Provider Retry-After is authoritative when Groq actually returned 429.
         floor = error.retry_after
     else:
-        floor = delay
+        # Transient failures without a provider/local quota deadline use
+        # bounded exponential backoff.  A concrete Retry-After below still
+        # takes precedence when it is longer than this baseline.
+        floor = delay * (2 ** max(0, retry_number))
     match = re.search(r"retry[- ]after[^0-9]*(\d+)", str(error), flags=re.IGNORECASE)
     if match:
         floor = max(floor, int(match.group(1)))
@@ -73,12 +77,60 @@ def _retry_delay(error: Exception, retry_number: int) -> int:
     return floor + random.randint(0, max(1, floor // 5))
 
 
-@shared_task(bind=True, autoretry_for=(), queue="article_generation")
+@shared_task(
+    bind=True,
+    autoretry_for=(),
+    queue="article_generation",
+    soft_time_limit=settings.ARTICLE_AGENT_TASK_SOFT_TIME_LIMIT,
+    time_limit=settings.ARTICLE_AGENT_TASK_TIME_LIMIT,
+)
 def generate_article_task(self, job_id: int) -> None:
     """Execute one persisted job. Broker contract: exactly one ``job_id``."""
     task_id = self.request.id
     try:
         ArticleJobExecutionService().execute(job_id, task_id=task_id)
+    except SoftTimeLimitExceeded as error:
+        retry_limit = settings.ARTICLE_AGENT_SOFT_TIME_LIMIT_MAX_RETRIES
+        if self.request.retries < retry_limit:
+            countdown = settings.ARTICLE_AGENT_SOFT_TIME_LIMIT_RETRY_DELAY_SECONDS
+            ArticleJob.objects.filter(pk=job_id, celery_task_id=task_id).update(
+                status=JobStatus.QUEUED,
+                current_stage="Time limit reached; resuming from checkpoint",
+                retry_count=self.request.retries + 1,
+                error_code="",
+                error_message="",
+                updated_at=timezone.now(),
+            )
+            logger.warning(
+                "Article job %s reached Celery soft time limit after %s seconds; "
+                "retrying from its persisted checkpoint in %s seconds "
+                "(attempt %s/%s).",
+                job_id,
+                settings.ARTICLE_AGENT_TASK_SOFT_TIME_LIMIT,
+                countdown,
+                self.request.retries + 1,
+                retry_limit,
+            )
+            raise self.retry(
+                exc=error,
+                countdown=countdown,
+                max_retries=retry_limit,
+            )
+
+        detail = (
+            "The article exceeded Celery's soft execution limit "
+            f"({settings.ARTICLE_AGENT_TASK_SOFT_TIME_LIMIT} seconds) "
+            f"after {retry_limit} resumable attempts."
+        )
+        logger.exception("Article job %s exhausted soft-time-limit retries: %s", job_id, detail)
+        ArticleJob.objects.filter(pk=job_id, celery_task_id=task_id).update(
+            status=JobStatus.FAILED,
+            current_stage="Failed after repeated execution time limits",
+            error_code="soft_time_limit_exhausted",
+            error_message=detail[:500],
+            updated_at=timezone.now(),
+        )
+        raise
     except Exception as error:
         if (
             _is_transient_provider_error(error)

@@ -17,6 +17,7 @@ from .contracts import (
     ReviewResult,
     SectionDraft,
     SectionPlan,
+    SpecialistOpinion,
 )
 
 
@@ -61,6 +62,7 @@ def article_request_from_dict(value: object) -> ArticleRequest:
             audience=data.get("audience", "general"),
             tone=data.get("tone", "professional, natural, informative"),
             purpose=data.get("purpose", "inform"),
+            brand_name=data.get("brand_name", ""),
         )
     except (TypeError, ValueError) as error:
         raise ContractValidationError(str(error)) from error
@@ -133,6 +135,7 @@ def article_plan_from_dict(value: object) -> ArticlePlan:
             global_constraints=_string_list(data, "global_constraints"),
             seo_intent=data.get("seo_intent", "informational"),
             coverage_requirements=_string_list(data, "coverage_requirements"),
+            brand_name=data.get("brand_name", ""),
         )
     except (TypeError, ValueError) as error:
         raise ContractValidationError(str(error)) from error
@@ -162,6 +165,7 @@ def review_result_from_dict(value: object) -> ReviewResult:
             issues=issues,
             strengths=_string_list(data, "strengths"),
             required_fixes=_string_list(data, "required_fixes"),
+            specialist_opinions=[specialist_opinion_from_dict(item) for item in _list(data.get("specialist_opinions", []), "specialist_opinions")],
         )
     except (TypeError, ValueError) as error:
         raise ContractValidationError(str(error)) from error
@@ -241,6 +245,7 @@ def article_plan_to_dict(plan: ArticlePlan) -> dict[str, Any]:
         "global_constraints": plan.global_constraints,
         "seo_intent": plan.seo_intent,
         "coverage_requirements": plan.coverage_requirements,
+        "brand_name": plan.brand_name,
     }
 
 
@@ -273,4 +278,45 @@ def article_review_to_dict(review: ArticleReview) -> dict[str, Any]:
         ],
         "section_scores": review.section_scores,
         "required_fixes": review.required_fixes,
+        "specialist_opinions": [specialist_opinion_to_dict(item) for item in review.specialist_opinions],
+    }
+
+
+def specialist_opinion_from_dict(value: object) -> SpecialistOpinion:
+    data = _mapping(value, "SpecialistOpinion")
+    try:
+        if not isinstance(_required(data, "applicable"), bool):
+            raise ContractValidationError("applicable must be a boolean.")
+        if not isinstance(_required(data, "score"), (int, float)):
+            raise ContractValidationError("score must be a number.")
+        findings = [
+            ReviewIssue(
+                type=_required(_mapping(item, "finding"), "type"),
+                severity=_required(_mapping(item, "finding"), "severity"),
+                description=_required(_mapping(item, "finding"), "description"),
+                affected_units=_string_list(_mapping(item, "finding"), "affected_units"),
+                recommendation=_mapping(item, "finding").get("recommendation", ""),
+            )
+            for item in _list(data.get("findings", []), "findings")
+        ]
+        return SpecialistOpinion(
+            role=_required(data, "role"), scope=_required(data, "scope"),
+            applicable=_required(data, "applicable"), score=_required(data, "score"),
+            findings=findings, strengths=_string_list(data, "strengths"),
+            required_fixes=_string_list(data, "required_fixes"), reason=data.get("reason", ""),
+        )
+    except (TypeError, ValueError) as error:
+        raise ContractValidationError(str(error)) from error
+
+
+def specialist_opinion_to_dict(opinion: SpecialistOpinion) -> dict[str, Any]:
+    return {
+        "role": opinion.role, "scope": opinion.scope, "applicable": opinion.applicable,
+        "score": opinion.score, "reason": opinion.reason, "strengths": opinion.strengths,
+        "required_fixes": opinion.required_fixes,
+        "findings": [
+            {"type": issue.type, "severity": issue.severity, "description": issue.description,
+             "affected_units": issue.affected_units, "recommendation": issue.recommendation}
+            for issue in opinion.findings
+        ],
     }

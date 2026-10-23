@@ -22,7 +22,7 @@ class FakeLlm:
 
     async def generate(self, prompt: str, **_kwargs) -> str:
         self.prompts.append(prompt)
-        if "Review this one section" in prompt:
+        if "reviewing one article section" in prompt:
             self.review_calls += 1
             if self.review_calls == 1:
                 return '{"passed":false,"score":5,"issues":[{"type":"coverage","severity":"medium","description":"Add detail"}],"strengths":[],"required_fixes":["Add detail"]}'
@@ -38,8 +38,8 @@ class FakeLlm:
             return "practical " * 125
         if "Repair the entire section's length" in prompt or "Repair this article unit" in prompt:
             return "repaired budget compliant section content " * 55
-        if "Review article-level" in prompt:
-            return '{"passed":true,"score":9,"findings":[],"required_fixes":[]}'
+        if "article-level editorial review" in prompt:
+            return "REQUIRED FIXES:\n- none"
         if "Write a concise conclusion" in prompt:
             return "concise conclusion"
         if "EXACTLY four useful FAQ" in prompt:
@@ -90,7 +90,13 @@ class ArticlePipelineIntegrationTests(SimpleTestCase):
 
         result, llm, renderer, stages, plans, persisted, memories, request, builder = asyncio.run(run())
         self.assertTrue(result.quality_report.passed)
-        self.assertEqual([item[0].heading for item in persisted if "passed" in item[1]], request.headings)
+        # Targeted style findings may persist a second, explicitly edited
+        # version of one section.  The initial accepted checkpoints must still
+        # cover the required headings in order.
+        self.assertEqual(
+            [item[0].heading for item in persisted if "passed" in item[1] and not item[1].get("edited")],
+            request.headings,
+        )
         self.assertEqual([section["heading"] for section in renderer.articles[0]["sections"]], request.headings)
         self.assertEqual(len(renderer.articles[0]["FAQ"]), 4)
         self.assertTrue(all(item["status"] == "accepted" for item in result.quality_report.unit_accounting.values()))
@@ -123,6 +129,12 @@ class ArticlePipelineIntegrationTests(SimpleTestCase):
                 self.calls += 1
                 if kind == "faq": return "\n".join(f"Question: Q{index}?\nAnswer: " + "answer " * 30 for index in range(4))
                 return "extra " * plan.budget.allocation_for(kind).target_words
+            async def generate_faq(self, plan, _memory, allocation):
+                self.calls += 4
+                return [
+                    {"question": f"Q{index}?", "answer": "answer " * max(1, allocation.target_words // 8)}
+                    for index in range(4)
+                ]
             async def repair(self, _plan, _memory, _kind, content, _allocation): return content
         class ArticleReviewerStub:
             async def review(self, *_args): return ArticleReview(True, 9)
@@ -157,7 +169,7 @@ class ArticlePipelineIntegrationTests(SimpleTestCase):
 
         writer_calls, supplement_calls, renderer_calls, result = asyncio.run(run())
         self.assertEqual(writer_calls, 1)
-        self.assertEqual(supplement_calls, 4)
+        self.assertEqual(supplement_calls, 7)
         self.assertEqual(renderer_calls, 2)
         self.assertEqual(result.document, b"docx")
 
