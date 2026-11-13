@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.types import Message
@@ -14,12 +15,17 @@ from apps.social_media_chatbot.infrastructure.ai.autogen_chatbot import (
 from apps.social_media_chatbot.infrastructure.persistence.repositories.django_chat_memory import (
     DjangoChatMemoryRepository,
 )
+from apps.agents.models import Chatbot as ChatbotConfig
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class TelegramBotConfig:
     bot_id: str
     token: str
+    updated_at: str = ""
 
 
 class TelegramBot:
@@ -49,22 +55,21 @@ class TelegramBot:
             if not message.from_user:
                 return
 
-            chatbot = AutoGenChatbot()
-
-            memory_repository = (
-                DjangoChatMemoryRepository()
-            )
-
-            use_case = ChatUseCase(
-                chatbot=chatbot,
-                memory_repository=memory_repository,
-            )
-
             telegram_user_id = str(
                 message.from_user.id
             )
 
+            chatbot = None
             try:
+                bot_config = await self._load_bot_config()
+                if bot_config is None:
+                    return
+                chatbot = AutoGenChatbot(bot_config)
+                memory_repository = DjangoChatMemoryRepository()
+                use_case = ChatUseCase(
+                    chatbot=chatbot,
+                    memory_repository=memory_repository,
+                )
 
                 response = await use_case.execute(
                     source="telegram",
@@ -75,27 +80,31 @@ class TelegramBot:
 
                 await message.answer(response)
 
-            except Exception as exc:
-
-                import traceback
-
-                print(
-                    f"Telegram bot error "
-                    f"[{self.config.bot_id}]: {exc}"
-                )
-
-                traceback.print_exc()
-
+            except Exception:
+                logger.exception("Telegram bot error [%s]", self.config.bot_id)
                 await message.answer(
                     "متأسفانه در پردازش پیام مشکلی پیش آمد."
                 )
+            finally:
+                if chatbot is not None:
+                    await chatbot.close()
+
+    async def _load_bot_config(self):
+        from asgiref.sync import sync_to_async
+
+        @sync_to_async
+        def load():
+            return ChatbotConfig.objects.filter(
+                pk=self.config.bot_id,
+                social_media="telegram",
+                is_active=True,
+            ).first()
+
+        return await load()
 
     async def run(self):
 
-        print(
-            f"Starting Telegram bot: "
-            f"{self.config.bot_id}"
-        )
+        logger.info("Starting Telegram bot: %s", self.config.bot_id)
 
         await self.dp.start_polling(
             self.bot

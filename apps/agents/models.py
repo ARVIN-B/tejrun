@@ -1,4 +1,7 @@
 from django.db import models
+from django.conf import settings
+
+from .fields import EncryptedTextField
 
 
 class Agent(models.Model):
@@ -30,6 +33,11 @@ class Chatbot(models.Model):
         on_delete=models.CASCADE,
         related_name="chatbots",
     )
+    owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="social_chatbots",
+    )
 
     name = models.CharField(max_length=150)
 
@@ -38,15 +46,42 @@ class Chatbot(models.Model):
         choices=SOCIAL_MEDIA_CHOICES,
     )
 
-    api_key = models.TextField()
+    # Values are encrypted before persistence. The form/runtime uses the
+    # decrypted Python value and never places credentials in templates.
+    api_key = EncryptedTextField(blank=True, default="")
 
-    model = models.CharField(
-        max_length=150,
+    model = models.CharField(max_length=150, blank=True)
+
+    base_url = models.URLField(blank=True)
+
+    telegram_bot_token = EncryptedTextField(blank=True, default="")
+
+    # The credential supplied in the dashboard belongs to the platform
+    # (Telegram Bot API or an Evolution API instance), not to the LLM.
+    platform_api_key = EncryptedTextField(blank=True, default="")
+    evolution_instance_name = models.CharField(max_length=100, blank=True)
+    social_webhook_secret = EncryptedTextField(blank=True, default="")
+    evolution_webhook_configured = models.BooleanField(default=False)
+    whatsapp_connection_state = models.CharField(
+        max_length=20,
+        default="not_configured",
+        choices=(
+            ("not_configured", "Not configured"),
+            ("creating", "Creating"),
+            ("connecting", "Connecting"),
+            ("open", "Connected"),
+            ("close", "Disconnected"),
+            ("error", "Error"),
+        ),
     )
 
-    base_url = models.URLField()
+    whatsapp_access_token = EncryptedTextField(blank=True, default="")
+    whatsapp_phone_number_id = models.CharField(max_length=100, blank=True)
+    whatsapp_verify_token = EncryptedTextField(blank=True, default="")
 
-    telegram_bot_token = models.TextField()
+    brand_name = models.CharField(max_length=150, blank=True)
+    website_url = models.URLField(blank=True)
+    knowledge_markdown = models.TextField(blank=True)
 
     system_prompt = models.TextField(
         blank=True,

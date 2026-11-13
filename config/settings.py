@@ -3,8 +3,9 @@ import json
 import os
 import sys
 from django.core.exceptions import ImproperlyConfigured
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
+_environment_before_project_dotenv = dict(os.environ)
 load_dotenv()
 
 
@@ -19,6 +20,43 @@ def _optional_positive_int_env(name: str) -> int | None:
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Read app-scoped settings without inserting them into os.environ. This keeps
+# this app's secrets/configuration separate from all other Django apps.
+_social_chatbot_env_path = os.getenv(
+    "SOCIAL_MEDIA_CHATBOT_ENV_FILE", ".env.social_media_chatbot"
+)
+if not Path(_social_chatbot_env_path).is_absolute():
+    _social_chatbot_env_path = BASE_DIR / _social_chatbot_env_path
+_social_chatbot_values = dotenv_values(_social_chatbot_env_path)
+
+
+def _social_chatbot_env(name: str) -> str:
+    # A real process environment may override the file for deployment, while
+    # values from the shared root .env cannot override this app-only file.
+    if name in _environment_before_project_dotenv:
+        return _environment_before_project_dotenv[name]
+    value = _social_chatbot_values.get(name)
+    return value if isinstance(value, str) else ""
+
+
+SOCIAL_MEDIA_CHATBOT_ENCRYPTION_KEY = _social_chatbot_env(
+    "SOCIAL_MEDIA_CHATBOT_ENCRYPTION_KEY"
+)
+SOCIAL_MEDIA_CHATBOT_DEFAULT_MODEL = _social_chatbot_env("SOCIAL_MEDIA_CHATBOT_LLM_MODEL")
+SOCIAL_MEDIA_CHATBOT_DEFAULT_BASE_URL = _social_chatbot_env(
+    "SOCIAL_MEDIA_CHATBOT_LLM_BASE_URL"
+)
+SOCIAL_MEDIA_CHATBOT_LLM_API_KEY = _social_chatbot_env("SOCIAL_MEDIA_CHATBOT_LLM_API_KEY")
+SOCIAL_MEDIA_CHATBOT_EVOLUTION_BASE_URL = _social_chatbot_env(
+    "SOCIAL_MEDIA_CHATBOT_EVOLUTION_BASE_URL"
+).rstrip("/")
+SOCIAL_MEDIA_CHATBOT_EVOLUTION_API_KEY = _social_chatbot_env(
+    "SOCIAL_MEDIA_CHATBOT_EVOLUTION_API_KEY"
+)
+SOCIAL_MEDIA_CHATBOT_PUBLIC_BASE_URL = _social_chatbot_env(
+    "SOCIAL_MEDIA_CHATBOT_PUBLIC_BASE_URL"
+).rstrip("/")
 
 
 # Quick-start development settings - unsuitable for production
@@ -156,6 +194,7 @@ CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", REDIS_URL)
 CELERY_TASK_DEFAULT_QUEUE = "default"
 CELERY_TASK_ROUTES = {
     "apps.article_agent.tasks.generate_article_task": {"queue": "article_generation"},
+    "social_media_chatbot.process_evolution_message": {"queue": "social_chatbot"},
 }
 ARTICLE_AGENT_TASK_TIME_LIMIT = int(
     os.getenv("ARTICLE_AGENT_TASK_TIME_LIMIT", "87300")

@@ -1,4 +1,7 @@
 from django.db import models
+from django.utils import timezone
+
+from apps.agents.models import Chatbot
 
 
 class ChatUser(models.Model):
@@ -99,3 +102,45 @@ class Message(models.Model):
 
     def __str__(self):
         return f"{self.role}: {self.content[:50]}"
+
+
+class InboundMessageEvent(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_PROCESSING = "processing"
+    STATUS_SENT = "sent"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_PROCESSING, "Processing"),
+        (STATUS_SENT, "Sent"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    chatbot = models.ForeignKey(Chatbot, on_delete=models.CASCADE, related_name="inbound_events")
+    platform_message_id = models.CharField(max_length=255)
+    sender_id = models.CharField(max_length=255)
+    message = models.TextField()
+    response = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    last_error = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=("chatbot", "platform_message_id"),
+                name="unique_social_inbound_message",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=("status", "updated_at"),
+                name="social_medi_status_25d1ec_idx",
+            )
+        ]
+
+    def is_stale(self, minutes=5):
+        return self.status == self.STATUS_PROCESSING and (
+            timezone.now() - self.updated_at
+        ).total_seconds() > minutes * 60

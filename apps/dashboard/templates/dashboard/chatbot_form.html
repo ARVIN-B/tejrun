@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}{% if is_create %}ساخت بات{% else %}ویرایش بات{% endif %} | Social Media Agent{% endblock %}
+
+{% block content %}
+<div class="dashboard-page chatbot-management-page">
+    <main class="dashboard-main chatbot-config-main">
+        <a href="{% url 'social_media_chatbots' %}" class="chatbot-back-link">بازگشت به فهرست بات‌ها</a>
+        <header class="chatbot-page-header">
+            <div class="chatbot-page-heading">
+                <div class="page-eyebrow"><span class="page-eyebrow-dot"></span>SOCIAL MEDIA AGENT</div>
+                <h1>{% if is_create %}ساخت بات جدید{% else %}ویرایش {{ chatbot.name }}{% endif %}</h1>
+                <p>تنظیمات اتصال و پاسخ‌گویی بات را مدیریت کنید.</p>
+            </div>
+        </header>
+
+        {% if messages %}
+            {% for message in messages %}<div class="chatbot-notice" role="status">{{ message }}</div>{% endfor %}
+        {% endif %}
+
+        <form method="post" enctype="multipart/form-data" class="chatbot-config-form" novalidate>
+            {% csrf_token %}
+            {% if form.non_field_errors %}<div class="chatbot-form-errors" role="alert">{{ form.non_field_errors }}</div>{% endif %}
+            {% for field in form %}
+                <div class="chatbot-form-field" data-field="{{ field.name }}">
+                    {{ field.label_tag }}
+                    {{ field }}
+                    {% if field.help_text %}<small>{{ field.help_text }}</small>{% endif %}
+                    {% for error in field.errors %}<span class="field-error" role="alert">{{ error }}</span>{% endfor %}
+                </div>
+            {% endfor %}
+            <p id="evolution-setup-note" class="chatbot-notice" hidden>
+                با ذخیره، برای این بات یک Instance مستقل ساخته می‌شود و QR اتصال نمایش داده خواهد شد.
+            </p>
+            {% if chatbot.knowledge_markdown %}<p class="knowledge-file-status">برای این بات محتوای Markdown ذخیره شده است. با بارگذاری فایل جدید جایگزین می‌شود.</p>{% endif %}
+            <div class="chatbot-form-actions">
+                <button type="submit" class="create-chatbot-button">{% if is_create %}ساخت بات{% else %}ذخیره تغییرات{% endif %}</button>
+                <a href="{% url 'social_media_chatbots' %}" class="chatbot-cancel-link">انصراف</a>
+            </div>
+        </form>
+    </main>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+(() => {
+  const platform = document.getElementById("id_social_media");
+  if (!platform) return;
+  const syncFields = () => {
+    const selected = platform.value;
+    document.querySelector('[data-field="platform_api_key"]').hidden = selected !== "telegram";
+    document.getElementById("evolution-setup-note").hidden = selected !== "whatsapp";
+    const keyLabel = document.querySelector('[data-field="platform_api_key"] label');
+    if (keyLabel) keyLabel.textContent = "توکن Telegram Bot";
+  };
+  platform.addEventListener("change", syncFields);
+  syncFields();
+})();
+</script>
+{% endblock %}

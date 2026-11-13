@@ -25,6 +25,7 @@ pip-wheel-metadata/
 .env
 .env.*
 !.env.example
+!.env.social_media_chatbot.example
 
 # =========================
 # IDE / Editors

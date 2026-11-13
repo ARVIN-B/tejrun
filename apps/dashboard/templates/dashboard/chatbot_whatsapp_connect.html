@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}اتصال واتس‌اپ {{ chatbot.name }} | Social Media Agent{% endblock %}
+
+{% block content %}
+<div class="dashboard-page chatbot-management-page">
+    <main class="dashboard-main chatbot-config-main">
+        <header class="chatbot-page-header">
+            <div class="chatbot-page-heading">
+                <div class="page-eyebrow"><span class="page-eyebrow-dot"></span>EVOLUTION API · BAILEYS</div>
+                <h1>اتصال {{ chatbot.name }}</h1>
+                <p>QR را در WhatsApp بخش Linked Devices اسکن کنید. QR برای مدت کوتاهی معتبر است.</p>
+            </div>
+        </header>
+
+        {% if messages %}
+            {% for message in messages %}<div class="chatbot-notice" role="status">{{ message }}</div>{% endfor %}
+        {% endif %}
+
+        <section class="chatbot-qr-card" aria-live="polite">
+            <p>وضعیت اتصال: <strong>{{ chatbot.get_whatsapp_connection_state_display }}</strong></p>
+            {% if qr_data_url %}
+                <img class="chatbot-qr-image" src="{{ qr_data_url }}" alt="QR اتصال امن WhatsApp">
+                <p>در تلفن همراه: WhatsApp ← Linked Devices ← Link a device</p>
+            {% elif chatbot.whatsapp_connection_state == "open" %}
+                <p>این Instance به WhatsApp متصل است.</p>
+            {% else %}
+                <p>QR در حال حاضر آماده نیست. دوباره تلاش کنید.</p>
+            {% endif %}
+            <form method="post">
+                {% csrf_token %}
+                <button type="submit" class="create-chatbot-button">دریافت یا تازه‌سازی QR</button>
+            </form>
+        </section>
+
+        <div class="chatbot-form-actions">
+            <a href="{% url 'social_media_chatbot_edit' chatbot.id %}" class="chatbot-cancel-link">ویرایش تنظیمات</a>
+            <a href="{% url 'social_media_chatbots' %}" class="chatbot-cancel-link">بازگشت به فهرست بات‌ها</a>
+        </div>
+    </main>
+</div>
+{% endblock %}

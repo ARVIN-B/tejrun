@@ -64,6 +64,10 @@
     <!-- Main -->
     <main class="dashboard-main">
 
+        {% if messages %}
+            {% for message in messages %}<div class="chatbot-notice" role="status">{{ message }}</div>{% endfor %}
+        {% endif %}
+
         <!-- Page Intro -->
         <section class="chatbot-page-header">
 
@@ -86,7 +90,7 @@
             </div>
 
 
-            <a href="#" class="create-chatbot-button">
+            <a href="{% url 'social_media_chatbot_create' %}" class="create-chatbot-button">
 
                 <span class="create-chatbot-icon">
                     <svg viewBox="0 0 24 24" fill="none">
@@ -149,7 +153,7 @@
                     </span>
 
                     <strong>
-                        2
+                        {{ active_count }}
                     </strong>
                 </div>
 
@@ -175,7 +179,7 @@
                     </span>
 
                     <strong>
-                        2
+                        {{ chatbots|length }}
                     </strong>
                 </div>
 
@@ -276,7 +280,7 @@
                             </th>
 
                             <th>
-                                مدل
+                                پلتفرم
                             </th>
 
                             <th class="prompt-column">
@@ -299,7 +303,7 @@
 
                         {% for chatbot in chatbots %}
 
-                        <tr>
+                        <tr id="chatbot-{{ chatbot.id }}">
 
                             <!-- Name -->
                             <td>
@@ -338,7 +342,7 @@
                             <td>
 
                                 <span class="model-badge">
-                                    {{ chatbot.model }}
+                                {{ chatbot.get_social_media_display }}
                                 </span>
 
                             </td>
@@ -348,7 +352,7 @@
                             <td class="prompt-column">
 
                                 <div class="prompt-preview">
-                                    {{ chatbot.prompt }}
+                                    {{ chatbot.system_prompt|default:chatbot.brand_name|truncatechars:120 }}
                                 </div>
 
                             </td>
@@ -357,26 +361,27 @@
                             <!-- Status -->
                             <td>
 
-                                <label class="status-toggle">
-
-                                    <input
-                                        type="checkbox"
-                                        {% if chatbot.active %}checked{% endif %}
-                                    >
+                                <form method="post" action="{% url 'social_media_chatbot_toggle' chatbot.id %}">
+                                    {% csrf_token %}
+                                    <button type="submit" class="status-toggle {% if chatbot.is_active %}is-active{% endif %}" aria-label="تغییر وضعیت {{ chatbot.name }}">
 
                                     <span class="toggle-track">
                                         <span class="toggle-thumb"></span>
                                     </span>
 
                                     <span class="toggle-label">
-                                        {% if chatbot.active %}
-                                            فعال
+                                        {% if chatbot.is_active %}
+                                            {% if chatbot.social_media == "whatsapp" %}
+                                                Active ? {{ chatbot.get_whatsapp_connection_state_display }}
+                                            {% else %}
+                                                فعال
+                                            {% endif %}
                                         {% else %}
                                             غیرفعال
                                         {% endif %}
                                     </span>
-
-                                </label>
+                                    </button>
+                                </form>
 
                             </td>
 
@@ -386,8 +391,19 @@
 
                                 <div class="chatbot-actions">
 
+                                    {% if chatbot.social_media == "whatsapp" %}
                                     <a
-                                        href="#"
+                                        href="{% url 'social_media_chatbot_whatsapp_connect' chatbot.id %}"
+                                        class="table-action edit-action"
+                                        title="ÙˆØ¶Ø¹ÛŒØª Ùˆ QR WhatsApp"
+                                        aria-label="ÙˆØ¶Ø¹ÛŒØª Ùˆ QR WhatsApp {{ chatbot.name }}"
+                                    >
+                                        QR
+                                    </a>
+                                    {% endif %}
+
+                                    <a
+                                        href="{% url 'social_media_chatbot_edit' chatbot.id %}"
                                         class="table-action edit-action"
                                         title="ویرایش"
                                     >
@@ -408,8 +424,10 @@
                                     </a>
 
 
-                                    <a
-                                        href="#"
+                                    <form method="post" action="{% url 'social_media_chatbot_delete' chatbot.id %}" onsubmit="return confirm('این بات حذف شود؟');">
+                                        {% csrf_token %}
+                                        <button
+                                        type="submit"
                                         class="table-action delete-action"
                                         title="حذف"
                                     >
@@ -442,7 +460,8 @@
                                                 stroke-linecap="round"
                                             />
                                         </svg>
-                                    </a>
+                                    </button>
+                                    </form>
 
                                 </div>
 
@@ -475,7 +494,7 @@
                                         اولین چت‌بات Social Media Agent خود را بسازید.
                                     </p>
 
-                                    <a href="#" class="create-chatbot-button">
+                                    <a href="{% url 'social_media_chatbot_create' %}" class="create-chatbot-button">
                                         + ساخت اولین چت‌بات
                                     </a>
 

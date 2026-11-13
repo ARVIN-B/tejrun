@@ -227,6 +227,16 @@
 
                 </div>
 
+                {% if social_chatbots %}
+                <nav class="social-chatbot-menu" aria-label="بات‌های فعال">
+                    <strong>بات‌های فعال</strong>
+                    {% for chatbot in social_chatbots %}
+                    <a href="{% url 'social_media_chatbots' %}#chatbot-{{ chatbot.id }}">
+                        {{ chatbot.name }} <span>{{ chatbot.get_social_media_display }}</span>
+                    </a>
+                    {% endfor %}
+                </nav>
+                {% endif %}
 
                 <div class="agent-footer">
 

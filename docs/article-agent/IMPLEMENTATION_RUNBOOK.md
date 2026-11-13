@@ -1,161 +1,241 @@
-# Implementation Runbook
+"""Deterministic publication-safety checks for bounded article units.
 
-Repeat until all acceptance criteria pass:
-1. read current milestone and relevant code
-2. inspect behavior, not class names
-3. express invariant in tests
-4. implement coherent change
-5. run targeted tests
-6. fix failures immediately
-7. run broader tests
-8. inspect diff
-9. update plan/findings/status
-10. commit coherent milestone
-11. continue to next unchecked item
+This module deliberately does not try to identify who wrote a text.  It
+protects readers from a narrower and testable set of publication risks:
+unsupported operational claims, invented commercial identities, and conflicting
+quantified requirements.  The LLM receives the findings for a targeted repair;
+the conservative replacement is a last resort so an unsafe claim is never
+silently rendered when a provider response is incomplete.
+"""
 
-Never stop because tests pass accidentally, a class exists, a prompt improved, or a commit says complete.
+from __future__ import annotations
 
-If implementation and test disagree, determine the product truth and fix the implementation or test accordingly. Never weaken validation just to get green.
+import re
+from collections import defaultdict
 
-Treat all model outputs as untrusted: empty, malformed, too short, too long, repetitive, contradictory, markdown-contaminated or adversarial.
+from apps.article_agent.application.word_budget import WordCounter
+from apps.article_agent.domain import ArticlePlan, ResearchData, ReviewIssue, SectionDraft
 
-Database is source of truth for job state. Redis is coordination/broker infrastructure. Output storage is artifact storage.
 
-Persist enough state after every expensive stage to resume safely.
+_SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?؟])\s+|\n+")
+_NUMBER = r"(?:\d+|[۰-۹]+|صفر|یک|دو|سه|چهار|پنج|شش|هفت|هشت|نه|ده|یازده|دوازده)"
+_SENSITIVE_UNIT = r"(?:روز|ماه|سال|ساعت|درصد|ریال|تومان|کیلووات|مگاوات|ولت|آمپر|وات)"
+_QUANTIFIED_CLAIM = re.compile(rf"{_NUMBER}\s*{_SENSITIVE_UNIT}", re.IGNORECASE)
+_NAMED_OFFICIAL_ENTITY = re.compile(
+    r"(?:سازمان|وزارت|سامانه|اداره|شرکت|برند|مجموعه|گروه)\s+"
+    r"(?:[«\"])?([آ-یA-Za-z][\w‌آ-یA-Za-z]*(?:\s+[آ-یA-Za-z][\w‌آ-یA-Za-z]*){0,3})"
+)
+_OPERATIONAL_REQUIREMENT = re.compile(
+    r"(?:مهلت\s+(?:ثبت[‌ ]نام|ارسال|پرداخت)|(?:ثبت[‌ ]نام|پرداخت|ارائه)\s+.*(?:الزامی|اجباری)|"
+    r"باید\s+(?:ظرف|تا\s+پایان)|ضمانت[‌ ]نامه|ودیعه)",
+    re.IGNORECASE,
+)
+_CLAIM_PARTS = re.compile(
+    rf"(?P<prefix>.{{0,72}}?)(?P<value>{_NUMBER})\s+(?P<unit>{_SENSITIVE_UNIT})(?P<suffix>.{{0,72}})",
+    re.IGNORECASE,
+)
+_ENTITY_STOPWORDS = {
+    "در", "این", "آن", "یک", "های", "ها", "برای", "کننده", "مناقصه",
+    "ثبت", "نام", "مسئول", "مربوط", "باید", "است", "های", "عمومی",
+}
+_SUBJECT_STOPWORDS = _ENTITY_STOPWORDS | {
+    "و", "یا", "از", "به", "با", "را", "که", "تا", "هر", "همان", "نیز",
+    "شرایط", "مدارک", "مورد", "نیاز", "بررسی", "فراخوان", "رسمی",
+}
 
-At every session boundary update:
-- current milestone
-- completed work
-- tests/evidence
-- remaining work
-- decisions
-- risks
 
-If context/account/model changes, read the repository docs and continue from the first unchecked item. Never restart from scratch.
+def _sentences(text: str) -> list[str]:
+    return [item.strip() for item in _SENTENCE_BOUNDARY.split(text) if item.strip()]
 
-Final report must list changed files, migrations, exact commands/results, smoke tests, load checks and limitations. If a required verification could not run, the system is NOT DONE.
 
-## Celery article-job contract
+def _normalized(value: str) -> str:
+    return " ".join(WordCounter.normalize(value).casefold().split())
 
-`apps.article_agent.tasks.generate_article_task` is a bound Celery task with
-exactly one broker argument: `job_id`. The HTTP flow persists the ArticleJob
-and its Celery task ID, then publishes `apply_async(args=[job_id], task_id=…)`.
-The task ID is transport metadata for stale-task rejection, never a second task
-argument. Retries use `self.retry()` without replacement positional arguments,
-so they retain the same one-argument contract.
 
-## Budgeted provider output configuration
+def _tokens(value: str) -> set[str]:
+    return {
+        token for token in _normalized(value).split()
+        if len(token) > 1 and token not in _SUBJECT_STOPWORDS
+    }
 
-`ARTICLE_AGENT_LLM_MAX_OUTPUT_TOKENS` (default `8192`) is passed explicitly
-to the Groq-compatible client; do not rely on a provider's short default
-completion length. `ARTICLE_AGENT_MAX_BUDGET_REPAIRS` (default `3`) bounds
-repair attempts. A unit remains rejected if it is still outside its persisted
-minimum/maximum allocation after those attempts.
 
-## Groq quota and routing configuration
+class ContentSafetyValidator:
+    """Detect and conservatively neutralise claims that lack available support."""
 
-The Redis limiter is a local admission controller, not evidence of an HTTP
-response from Groq. `RateLimitExceeded` records one of the account/model
-concurrency, RPM, TPM, input-TPM or output-TPM dimensions. Its retry delay is
-derived from the blocking active lease or counter window. `ProviderRateLimitError`
-is emitted only after an actual HTTP 429 and preserves `Retry-After` when the
-provider supplied it.
+    def inspect_section(
+        self,
+        plan: ArticlePlan,
+        section: SectionDraft,
+        research: ResearchData,
+    ) -> list[ReviewIssue]:
+        return self.inspect_text(
+            plan, section.content, research, unit_id=f"section:{section.section_index}"
+        )
 
-Every call reserves an UTF-8 conservative input estimate and a unit-specific
-maximum completion budget. Successful calls reconcile that reservation with
-provider usage metadata; unsuccessful/timed-out calls release only concurrency
-because provider token consumption is unknown. Account limits always apply.
-Optional model limits in `ARTICLE_AGENT_GROQ_MODEL_LIMITS` apply in addition,
-so changing model does not bypass an organization/project limit.
+    def inspect_text(
+        self,
+        plan: ArticlePlan,
+        text: str,
+        research: ResearchData,
+        *,
+        unit_id: str,
+    ) -> list[ReviewIssue]:
+        findings: list[ReviewIssue] = []
+        for sentence in _sentences(text):
+            if self._has_unapproved_brand(sentence, plan, research):
+                findings.append(
+                    self._issue(
+                        "unapproved_brand_reference", unit_id, sentence,
+                        "Remove the unverified brand or provider reference. Only the exact user-supplied brand name may be used.",
+                    )
+                )
+                continue
+            if self._needs_support(sentence) and not self._supported_by_research(sentence, research):
+                findings.append(
+                    self._issue(
+                        "unsupported_operational_claim", unit_id, sentence,
+                        "Remove the exact operational claim or rewrite it as a general instruction to verify the official project notice; do not invent a replacement number, deadline, authority, or requirement.",
+                    )
+                )
+        return findings
 
-`ARTICLE_AGENT_PRIMARY_MODEL` falls back to `LLM_MODEL` for compatibility.
-`ARTICLE_AGENT_FALLBACK_MODELS` and `ARTICLE_AGENT_REVIEW_MODEL` are opt-in;
-writing stays on the primary model until an eligible *model-scoped local*
-capacity rejection occurs. Provider-429 and transient-error fallback are
-disabled by default because those failures can be account-wide. Enable them
-only after confirming project permissions and quotas. Values for every quota
-must come from the exact Groq project/organization Limits view, not examples
-or published plan tables.
+    def sanitize_text(
+        self,
+        plan: ArticlePlan,
+        text: str,
+        research: ResearchData,
+        *,
+        unit_id: str,
+    ) -> tuple[str, list[ReviewIssue]]:
+        """Return prose safe to publish if targeted model repair did not resolve it."""
+        findings = self.inspect_text(plan, text, research, unit_id=unit_id)
+        unsafe = {self._quoted_sentence(item.description) for item in findings}
+        if not unsafe:
+            return text, []
+        replacement = self._safe_replacement(plan.language)
+        replaced = [replacement if sentence in unsafe else sentence for sentence in _sentences(text)]
+        return " ".join(replaced).strip(), findings
 
-An empty or non-text provider completion is never passed to `BudgetManager`.
-The client retries that individual provider call a bounded number of times
-(`ARTICLE_AGENT_EMPTY_RESPONSE_RETRIES`, default `1`); if it remains empty it
-raises `ProviderEmptyResponseError`, which is a retryable provider failure.
-The job resumes from accepted checkpoints on Celery retry instead of treating
-zero words as a normal budget-repair result.
+    def sanitize_contradictions(
+        self,
+        plan: ArticlePlan,
+        sections: list[SectionDraft],
+        research: ResearchData,
+    ) -> tuple[list[SectionDraft], list[ReviewIssue]]:
+        """Neutralise conflicting quantified instructions without guessing which is true."""
+        if research.status == "available":
+            # Source-backed claims still undergo per-sentence support checks.  A
+            # deterministic contradiction rule is intentionally conservative
+            # only when the system lacks provenance to arbitrate the conflict.
+            return sections, []
+        claims: list[tuple[int, str, str, set[str]]] = []
+        for section in sections:
+            for sentence in _sentences(section.content):
+                match = _CLAIM_PARTS.search(sentence)
+                if not match:
+                    continue
+                subject = _tokens(match.group("prefix") + " " + match.group("suffix"))
+                if subject:
+                    claims.append((section.section_index, sentence, _normalized(match.group("value")), subject))
+        conflicting: dict[int, set[str]] = defaultdict(set)
+        findings: list[ReviewIssue] = []
+        for index, (left_unit, left_sentence, left_value, left_subject) in enumerate(claims):
+            for right_unit, right_sentence, right_value, right_subject in claims[index + 1:]:
+                if left_value == right_value or not (left_subject & right_subject):
+                    continue
+                conflicting[left_unit].add(left_sentence)
+                conflicting[right_unit].add(right_sentence)
+                findings.append(
+                    ReviewIssue(
+                        type="conflicting_quantified_claim",
+                        severity="high",
+                        description="Conflicting quantified operational statements were removed because no verified research is available.",
+                        affected_units=[f"section:{left_unit}", f"section:{right_unit}"],
+                        recommendation="Verify the official source and state one supported requirement only.",
+                    )
+                )
+        if not conflicting:
+            return sections, []
+        replacement = self._safe_replacement(plan.language)
+        sanitized: list[SectionDraft] = []
+        for section in sections:
+            sentences = _sentences(section.content)
+            content = " ".join(
+                replacement if sentence in conflicting.get(section.section_index, set()) else sentence
+                for sentence in sentences
+            ).strip()
+            sanitized.append(
+                SectionDraft(
+                    section.section_index, section.heading, content,
+                    word_count=WordCounter.count_text(content),
+                    revision_number=section.revision_number,
+                )
+            )
+        return sanitized, findings
 
-## Current execution status (2026-10-09)
+    @staticmethod
+    def _issue(kind: str, unit_id: str, sentence: str, recommendation: str) -> ReviewIssue:
+        return ReviewIssue(
+            type=kind,
+            severity="high",
+            description=f"Unsafe sentence: {sentence}",
+            affected_units=[unit_id],
+            recommendation=recommendation,
+        )
 
-- M1/M2 are verified by planner/runtime-budget tests, including deliberate starvation, short/long repair and impossible-output rejection.
-- M3 has versioned execution claims, stale-write guards and persisted section/extras checkpoints; renderer-resume is verified without regenerating prose.
-- M4/M5/M10/M13/M14 have implementation plus targeted tests. Large-context and live Redis integration verification remain pending.
-- Latest local evidence: `.venv\\Scripts\\python.exe manage.py test apps.article_agent.tests --keepdb --verbosity 1` (63 passing), `.venv\\Scripts\\python.exe manage.py check` (pass), and `.venv\\Scripts\\python.exe manage.py makemigrations --check --dry-run` (no changes). Production deployment verification remains a server-side operation.
-- Next exact action: add renderer-failure resume coverage, then complete section/article review, style and lifecycle adversarial verification.
+    @staticmethod
+    def _quoted_sentence(description: str) -> str:
+        return description.removeprefix("Unsafe sentence: ").strip()
 
-## Context-window safety update (2026-10-10)
+    @staticmethod
+    def _needs_support(sentence: str) -> bool:
+        return bool(
+            _QUANTIFIED_CLAIM.search(sentence)
+            or _OPERATIONAL_REQUIREMENT.search(sentence)
+            or _NAMED_OFFICIAL_ENTITY.search(sentence)
+        )
 
-- Every Article Agent provider call now has a configured context-window guard:
-  estimated UTF-8 input tokens + requested completion + safety margin must fit
-  before the request is sent.  A prevented request records model, operation,
-  input estimate, requested output, configured window and safety margin.
-- Long sections are generated as bounded installments. Only compressed article
-  memory and a 120-word trailing bridge are supplied to the next installment;
-  the accumulated section is never re-sent as prompt context.
-- Context JSON is constrained by UTF-8 bytes, not Python character count, and
-  compacts required draft data into valid JSON rather than returning an
-  oversized fallback. Provider 429/5xx details are logged and the job stores a
-  bounded actionable diagnostic.
-- Local evidence: focused context, provider-guard and domain tests pass. This
-  is not a configured-provider or Linux-server smoke test; the deployment must
-  set `ARTICLE_AGENT_LLM_CONTEXT_WINDOW_TOKENS` to the actual selected model's
-  context window and run a 5k/10k production smoke test.
+    @staticmethod
+    def _safe_replacement(language: str) -> str:
+        if language.casefold().startswith("fa"):
+            return "شرایط، مهلت‌ها و الزامات اجرایی را باید از متن رسمی فراخوان و مرجع مسئول همان پروژه بررسی کرد."
+        return "Verify the applicable conditions, deadlines, and requirements against the official notice for that project."
 
-### TPM reservation follow-up
+    @staticmethod
+    def _research_text(research: ResearchData) -> str:
+        return " ".join(
+            [*research.facts, *research.statistics, *research.examples, *research.claims]
+        )
 
-- Context construction also reserves room for the effective local TPM quota
-  (`ARTICLE_AGENT_GROQ_TOKENS_PER_MINUTE` after its safety margin). This
-  prevents a context-window-safe revision from failing local preflight with
-  `combined_token_reservation_exceeds_window`.
-- The provider adapter makes a final per-model reservation adjustment when a
-  requested completion is larger than its configured account/model TPM can
-  ever accommodate. Remaining-minute exhaustion remains a retryable local
-  rate-limit event; a prompt that alone exceeds a configured input quota now
-  reports its exact input/quota cause.
+    def _supported_by_research(self, sentence: str, research: ResearchData) -> bool:
+        if research.status != "available" or not research.sources:
+            return False
+        corpus = _normalized(self._research_text(research))
+        normalized_sentence = _normalized(sentence)
+        numbers = re.findall(r"\d+|[۰-۹]+", normalized_sentence)
+        if numbers and not all(number in corpus for number in numbers):
+            return False
+        sentence_tokens = _tokens(sentence)
+        research_tokens = _tokens(corpus)
+        return len(sentence_tokens & research_tokens) >= 2
 
-### Secondary provider credential fallback
-
-- With `ARTICLE_AGENT_ENABLE_SECONDARY_API_KEY_FALLBACK=true`, an actual
-  provider HTTP 429 first retries the identical bounded request once through
-  `LLM_API_KEY_2`; neither credential value is logged. A second 429 follows
-  the normal retry policy with the provider's Retry-After.
-- This cannot bypass a TPD quota shared by both keys. For the fallback to be
-  useful, `LLM_API_KEY_2` must have a separate Groq organization/project
-  quota. Configuration templates contain placeholders only; live keys belong
-  only in deployment secrets.
-
-### Multi-key TPD fallback and Persian prompt standard (2026-10-11)
-
-- All production Article Agent LLM calls flow through `GroqClient`. On an
-  actual provider 429 whose body identifies token-per-day/TPD exhaustion, it
-  tries each configured `LLM_API_KEY` slot through `LLM_API_KEY_5` once in
-  order, without logging any credential. If every configured slot is exhausted,
-  the normal Celery retry policy resumes from slot 1 on the next task attempt.
-  This is deliberately bounded: it never spins forever inside a worker.
-- `ARTICLE_AGENT_API_KEY_SLOTS` selects the inspected range (default 5).
-  Separate key slots only improve availability when their provider quotas are
-  genuinely separate; shared organization TPD cannot be bypassed.
-- Generation, continuation, review, revision, final editing and supplemental
-  unit prompts now share concise Persian editorial instructions: idiomatic
-  Persian, meaningful paragraphs, non-template openings/transitions, direct
-  FAQ answers, useful conclusions and no fabricated evidence. The standard is
-  role-specific and small enough to preserve existing bounded context limits.
-
-### Long-form Celery execution window (2026-10-11)
-
-- Article generation now defaults to a six-hour soft limit and a six-hour,
-  fifteen-minute hard limit (`ARTICLE_AGENT_TASK_SOFT_TIME_LIMIT=21600`,
-  `ARTICLE_AGENT_TASK_TIME_LIMIT=22500`). This allows bounded long-form
-  writing, review/revision and legitimate provider wait periods to complete,
-  while retaining a hard stop for genuinely stuck work.
-- Workers read these settings at startup. Production deployment must restart
-  the `article_generation` Celery workers after updating environment values.
+    def _has_unapproved_brand(
+        self, sentence: str, plan: ArticlePlan, research: ResearchData
+    ) -> bool:
+        allowed = _normalized(plan.brand_name)
+        research_text = _normalized(self._research_text(research))
+        for match in _NAMED_OFFICIAL_ENTITY.finditer(sentence):
+            candidate = _normalized(match.group(1))
+            candidate_words = candidate.split()
+            if (
+                not candidate
+                or candidate in _ENTITY_STOPWORDS
+                or (candidate_words and candidate_words[0] in _ENTITY_STOPWORDS)
+            ):
+                continue
+            if allowed and (candidate in allowed or allowed in candidate):
+                continue
+            if candidate in research_text:
+                continue
+            return True
+        return False

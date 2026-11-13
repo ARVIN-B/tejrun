@@ -1,6 +1,7 @@
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import redirect, render
+from apps.agents.models import Chatbot
 
 
 def login_view(request):
@@ -40,6 +41,14 @@ def dashboard_view(request):
     return render(
         request,
         "dashboard/dashboard.html",
+        {
+            "social_chatbots": Chatbot.objects.filter(
+                owner=request.user,
+                is_active=True,
+            )
+            .only("id", "name", "social_media", "is_active")
+            .order_by("name"),
+        },
     )
 
 @login_required
@@ -47,47 +56,3 @@ def logout_view(request):
     logout(request)
 
     return redirect("login")
-
-
-@login_required
-def social_media_chatbots_view(request):
-    chatbots = [
-        {
-            "id": 1,
-            "name": "Tejrun Support",
-            "model": "GPT-OSS 120B",
-            "prompt": (
-                "You are the official customer support assistant "
-                "for Tejrun. Answer users clearly and professionally..."
-            ),
-            "active": True,
-        },
-        {
-            "id": 2,
-            "name": "Instagram Assistant",
-            "model": "GPT-OSS 120B",
-            "prompt": (
-                "You are a social media assistant responsible for "
-                "answering Instagram users and maintaining..."
-            ),
-            "active": True,
-        },
-        {
-            "id": 3,
-            "name": "Sales Assistant",
-            "model": "DeepSeek V3",
-            "prompt": (
-                "You are a sales assistant. Help customers understand "
-                "products, prices and available services..."
-            ),
-            "active": False,
-        },
-    ]
-
-    return render(
-        request,
-        "dashboard/social_media_chatbots.html",
-        {
-            "chatbots": chatbots,
-        },
-    )

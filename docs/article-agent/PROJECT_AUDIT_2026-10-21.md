@@ -568,6 +568,32 @@ env خوانده نمی‌شود و `STATIC_ROOT`/storage deployment configurati
 usage، compaction, retry, credential slot (بدون secret)، elapsed time و final word
 delta اضافه کنید؛ SLO و alert تعریف کنید.
 
+### P2-12 — دو polling مستقل row را بازنویسی می‌کنند و برند/متا چشمک می‌زند
+
+**کامنت ممیزی:** صفحه برای هر job دو timer مستقل دارد: `poll` هر ۳ ثانیه `render`
+را اجرا و با `row.innerHTML = ...` کل row را بازسازی می‌کند؛ `decorate` هر ۳٫۱
+ثانیه دوباره همان endpoint را می‌خواند و `job-seo-meta` شامل برند، متا و خلاصهٔ
+نظرهای تخصصی را append می‌کند. بنابراین هر render، node برند را حذف می‌کند و تا
+اجرای decorate بعدی خالی می‌ماند. اختلاف زمانی timerها باعث همان پاک‌شدن و
+نوشته‌شدن متناوبی می‌شود که در رابط دیده می‌شود؛ Redis/Celery علت مستقیم آن نیست.
+
+**شواهد:** `apps/article_agent/templates/article_agent/create_article.html:14,16`؛
+`apps/article_agent/presentation/web/views.py:69-72`.
+
+**اثر:** UI ناپایدار و misleading هنگام انتظار برای مقاله؛ همچنین برای هر job
+تقریباً دو درخواست status در هر چرخه ارسال می‌شود.
+
+**پیشنهاد رفع:** یک چرخهٔ polling واحد داشته باشید که هر job را فقط یک بار fetch
+کند و تمام state، از جمله `brand_name`، meta و specialist summary را در همان
+`render(job)` با DOM پایدار به‌روزرسانی کند. به‌جای `innerHTML` کامل، nodeهای
+دارای شناسه را به‌روزرسانی کنید یا همهٔ fieldها را در template اولیه بسازید.
+در نتیجه brand از render اولیه نیز بی‌درنگ نمایش داده می‌شود و node با هر refresh
+حذف نمی‌شود.
+
+**تأیید پس از رفع:** browser/integration test: برند از نخستین paint قابل مشاهده
+باشد، در حداقل سه polling پیاپی بدون حذف باقی بماند، و برای هر job در هر interval
+فقط یک درخواست status ثبت شود.
+
 ## یافته‌های P3 و کد نیمه‌کاره/استفاده‌نشده
 
 ### P3-01 — WhatsApp adapter فایل خالی است
